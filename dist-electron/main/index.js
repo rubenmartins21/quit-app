@@ -26,11 +26,17 @@ let currentToken = null;
 function setToken(token) {
   currentToken = token;
 }
-async function request(method, endpoint, body, auth = false) {
+async function request(method, endpoint, body, requiresAuth = false) {
   const headers = { "Content-Type": "application/json" };
-  if (auth && currentToken) headers["Authorization"] = `Bearer ${currentToken}`;
+  if (requiresAuth && currentToken) {
+    headers["Authorization"] = `Bearer ${currentToken}`;
+  }
   try {
-    const res = await fetch(`${BASE_URL}${endpoint}`, { method, headers, body: body ? JSON.stringify(body) : void 0 });
+    const res = await fetch(`${BASE_URL}${endpoint}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : void 0
+    });
     const json = await res.json();
     if (!res.ok) return { error: json.error ?? "Erro desconhecido" };
     return { data: json };
@@ -38,9 +44,31 @@ async function request(method, endpoint, body, auth = false) {
     return { error: err instanceof Error ? err.message : "Sem ligacao ao servidor" };
   }
 }
-const requestOtp = (email) => request("POST", "/auth/request-otp", { email });
-const verifyOtp = (email, code, deviceId, platform) => request("POST", "/auth/verify-otp", { email, code, deviceId, platform });
-const getMe = () => request("GET", "/me", void 0, true);
+async function requestOtp(email) {
+  return request("POST", "/auth/request-otp", { email });
+}
+async function verifyOtp(email, code, deviceId, platform) {
+  return request(
+    "POST",
+    "/auth/verify-otp",
+    { email, code, deviceId, platform }
+  );
+}
+async function getMe() {
+  return request("GET", "/me", void 0, true);
+}
+async function createChallenge(durationDays, reason) {
+  return request("POST", "/challenges", { durationDays, reason }, true);
+}
+async function getActiveChallenge() {
+  return request("GET", "/challenges/active", void 0, true);
+}
+async function cancelChallenge(id) {
+  return request("PATCH", `/challenges/${id}/cancel`, void 0, true);
+}
+async function getChallengeHistory() {
+  return request("GET", "/challenges", void 0, true);
+}
 function getOrCreateDeviceId() {
   const filePath = path.join(electron.app.getPath("userData"), "device.json");
   try {
@@ -3621,6 +3649,7 @@ var ZodFirstPartyTypeKind;
   ZodFirstPartyTypeKind2["ZodReadonly"] = "ZodReadonly";
 })(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
 const stringType = ZodString.create;
+const numberType = ZodNumber.create;
 ZodNever.create;
 ZodArray.create;
 const objectType = ZodObject.create;
@@ -3656,11 +3685,45 @@ electron.ipcMain.handle("auth:logout", async () => {
   setToken(null);
   return { ok: true };
 });
+const CreateSchema = objectType({
+  durationDays: numberType().int().min(7),
+  reason: stringType().min(10).max(500).trim()
+});
+electron.ipcMain.handle("challenge:create", async (_e, payload) => {
+  var _a;
+  const parsed = CreateSchema.safeParse(payload);
+  if (!parsed.success) {
+    const msg = ((_a = parsed.error.errors[0]) == null ? void 0 : _a.message) ?? "Dados invalidos";
+    return { error: msg };
+  }
+  const res = await createChallenge(parsed.data.durationDays, parsed.data.reason);
+  if (res.error || !res.data) return { error: res.error ?? "Erro ao criar desafio" };
+  return { ok: true, challenge: res.data };
+});
+electron.ipcMain.handle("challenge:active", async () => {
+  var _a;
+  const res = await getActiveChallenge();
+  if (res.error) return { error: res.error };
+  return { ok: true, challenge: ((_a = res.data) == null ? void 0 : _a.challenge) ?? null };
+});
+electron.ipcMain.handle("challenge:cancel", async (_e, id) => {
+  if (typeof id !== "string") return { error: "ID invalido" };
+  const res = await cancelChallenge(id);
+  if (res.error || !res.data) return { error: res.error ?? "Erro ao cancelar" };
+  return { ok: true, challenge: res.data };
+});
+electron.ipcMain.handle("challenge:history", async () => {
+  var _a;
+  const res = await getChallengeHistory();
+  if (res.error) return { error: res.error };
+  return { ok: true, challenges: ((_a = res.data) == null ? void 0 : _a.challenges) ?? [] };
+});
 const __dirname$1 = path.dirname(url.fileURLToPath(typeof document === "undefined" ? require("url").pathToFileURL(__filename).href : _documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === "SCRIPT" && _documentCurrentScript.src || new URL("index.js", document.baseURI).href));
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const isDev = !!VITE_DEV_SERVER_URL;
+let mainWindow = null;
 function createWindow() {
-  const win = new electron.BrowserWindow({
+  mainWindow = new electron.BrowserWindow({
     width: 960,
     height: 660,
     minWidth: 720,
@@ -3670,31 +3733,41 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname$1, "../preload/index.js"),
       contextIsolation: true,
+      // REQUIRED — renderer can't access Node
       nodeIntegration: false,
+      // REQUIRED — no Node in renderer
       sandbox: true,
+      // Extra isolation
       webSecurity: true
     },
     show: false
+    // Prevent white flash
   });
-  win.setMenuBarVisibility(false);
-  win.once("ready-to-show", () => win.show());
-  win.webContents.setWindowOpenHandler(({ url: url2 }) => {
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.once("ready-to-show", () => {
+    mainWindow == null ? void 0 : mainWindow.show();
+  });
+  mainWindow.webContents.setWindowOpenHandler(({ url: url2 }) => {
     electron.shell.openExternal(url2);
     return { action: "deny" };
   });
+  mainWindow.webContents.on("will-navigate", (event, url2) => {
+    if (isDev && url2.startsWith("http://localhost:5173")) return;
+    event.preventDefault();
+  });
   if (isDev) {
-    win.loadURL(VITE_DEV_SERVER_URL);
-    win.webContents.openDevTools({ mode: "detach" });
+    mainWindow.loadURL(VITE_DEV_SERVER_URL);
+    mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
-    win.loadFile(path.join(__dirname$1, "../../dist/index.html"));
+    mainWindow.loadFile(path.join(__dirname$1, "../../dist/index.html"));
   }
 }
-electron.app.on("ready", () => {
+electron.app.on("ready", async () => {
   getOrCreateDeviceId();
   const token = loadSession();
   if (token) {
     setToken(token);
-    console.log("Sessao restaurada");
+    console.log("✅  Session restored from disk");
   }
   createWindow();
 });

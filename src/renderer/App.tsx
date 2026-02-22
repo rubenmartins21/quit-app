@@ -1,11 +1,34 @@
+import { useState } from "react";
 import { useAuth } from "./hooks/useAuth";
 import { LoginScreen } from "./screens/LoginScreen";
 import { DashboardScreen } from "./screens/DashboardScreen";
+import { CreateChallengeScreen } from "./screens/CreateChallengeScreen";
 import { LoadingScreen } from "./screens/LoadingScreen";
+import { ChallengeData } from "./lib/ipc";
+
+export type AppScreen = "dashboard" | "challenge";
 
 export function App() {
   const { state, login, logout } = useAuth();
+  const [screen, setScreen] = useState<AppScreen>("dashboard");
+
   if (state.status === "loading") return <LoadingScreen />;
   if (state.status === "unauthenticated") return <LoginScreen onSuccess={login} />;
-  return <DashboardScreen user={state.user} onLogout={logout} />;
+
+  if (screen === "challenge") {
+    return (
+      <CreateChallengeScreen
+        onCreated={(_challenge: ChallengeData) => setScreen("dashboard")}
+        onNavigate={setScreen}
+      />
+    );
+  }
+
+  return (
+    <DashboardScreen
+      user={state.user}
+      onLogout={logout}
+      onNavigate={setScreen}
+    />
+  );
 }
