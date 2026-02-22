@@ -26,33 +26,23 @@ let currentToken = null;
 function setToken(token) {
   currentToken = token;
 }
-async function request(method, endpoint, body, requiresAuth = false) {
+async function request(method, endpoint, body, auth = false) {
   const headers = { "Content-Type": "application/json" };
-  if (requiresAuth && currentToken) {
-    headers["Authorization"] = `Bearer ${currentToken}`;
-  }
+  if (auth && currentToken) headers["Authorization"] = `Bearer ${currentToken}`;
   try {
-    const res = await fetch(`${BASE_URL}${endpoint}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : void 0
-    });
+    const res = await fetch(`${BASE_URL}${endpoint}`, { method, headers, body: body ? JSON.stringify(body) : void 0 });
     const json = await res.json();
     if (!res.ok) return { error: json.error ?? "Erro desconhecido" };
     return { data: json };
   } catch (err) {
-    return { error: err instanceof Error ? err.message : "Sem ligacao ao servidor" };
+    return { error: err instanceof Error ? err.message : "Sem ligação ao servidor" };
   }
 }
 async function requestOtp(email) {
   return request("POST", "/auth/request-otp", { email });
 }
 async function verifyOtp(email, code, deviceId, platform) {
-  return request(
-    "POST",
-    "/auth/verify-otp",
-    { email, code, deviceId, platform }
-  );
+  return request("POST", "/auth/verify-otp", { email, code, deviceId, platform });
 }
 async function getMe() {
   return request("GET", "/me", void 0, true);
@@ -65,6 +55,12 @@ async function getActiveChallenge() {
 }
 async function cancelChallenge(id) {
   return request("PATCH", `/challenges/${id}/cancel`, void 0, true);
+}
+async function createQuitRequest(id, feeling) {
+  return request("POST", `/challenges/${id}/quit-request`, { feeling }, true);
+}
+async function cancelQuitRequest(id) {
+  return request("DELETE", `/challenges/${id}/quit-request`, void 0, true);
 }
 async function getChallengeHistory() {
   return request("GET", "/challenges", void 0, true);
@@ -3685,38 +3681,41 @@ electron.ipcMain.handle("auth:logout", async () => {
   setToken(null);
   return { ok: true };
 });
-const CreateSchema = objectType({
-  durationDays: numberType().int().min(7),
-  reason: stringType().min(10).max(500).trim()
-});
+const CreateSchema = objectType({ durationDays: numberType().int().min(7), reason: stringType().min(10).max(500).trim() });
+const QuitRequestSchema = objectType({ id: stringType(), feeling: stringType().min(5).max(1e3).trim() });
 electron.ipcMain.handle("challenge:create", async (_e, payload) => {
   var _a;
   const parsed = CreateSchema.safeParse(payload);
-  if (!parsed.success) {
-    const msg = ((_a = parsed.error.errors[0]) == null ? void 0 : _a.message) ?? "Dados invalidos";
-    return { error: msg };
-  }
+  if (!parsed.success) return { error: ((_a = parsed.error.errors[0]) == null ? void 0 : _a.message) ?? "Dados inválidos" };
   const res = await createChallenge(parsed.data.durationDays, parsed.data.reason);
-  if (res.error || !res.data) return { error: res.error ?? "Erro ao criar desafio" };
-  return { ok: true, challenge: res.data };
+  return res.error ? { error: res.error } : { ok: true, challenge: res.data };
 });
 electron.ipcMain.handle("challenge:active", async () => {
   var _a;
   const res = await getActiveChallenge();
-  if (res.error) return { error: res.error };
-  return { ok: true, challenge: ((_a = res.data) == null ? void 0 : _a.challenge) ?? null };
+  return res.error ? { error: res.error } : { ok: true, challenge: ((_a = res.data) == null ? void 0 : _a.challenge) ?? null };
 });
 electron.ipcMain.handle("challenge:cancel", async (_e, id) => {
-  if (typeof id !== "string") return { error: "ID invalido" };
+  if (typeof id !== "string") return { error: "ID inválido" };
   const res = await cancelChallenge(id);
-  if (res.error || !res.data) return { error: res.error ?? "Erro ao cancelar" };
-  return { ok: true, challenge: res.data };
+  return res.error ? { error: res.error } : { ok: true, challenge: res.data };
+});
+electron.ipcMain.handle("challenge:quit-request:create", async (_e, payload) => {
+  var _a;
+  const parsed = QuitRequestSchema.safeParse(payload);
+  if (!parsed.success) return { error: ((_a = parsed.error.errors[0]) == null ? void 0 : _a.message) ?? "Dados inválidos" };
+  const res = await createQuitRequest(parsed.data.id, parsed.data.feeling);
+  return res.error ? { error: res.error } : { ok: true, challenge: res.data };
+});
+electron.ipcMain.handle("challenge:quit-request:cancel", async (_e, id) => {
+  if (typeof id !== "string") return { error: "ID inválido" };
+  const res = await cancelQuitRequest(id);
+  return res.error ? { error: res.error } : { ok: true, challenge: res.data };
 });
 electron.ipcMain.handle("challenge:history", async () => {
   var _a;
   const res = await getChallengeHistory();
-  if (res.error) return { error: res.error };
-  return { ok: true, challenges: ((_a = res.data) == null ? void 0 : _a.challenges) ?? [] };
+  return res.error ? { error: res.error } : { ok: true, challenges: ((_a = res.data) == null ? void 0 : _a.challenges) ?? [] };
 });
 const __dirname$1 = path.dirname(url.fileURLToPath(typeof document === "undefined" ? require("url").pathToFileURL(__filename).href : _documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === "SCRIPT" && _documentCurrentScript.src || new URL("index.js", document.baseURI).href));
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;

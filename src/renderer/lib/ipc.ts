@@ -1,9 +1,16 @@
-interface ChallengeProgress { daysElapsed: number; daysRemaining: number; percentage: number; }
+export interface QuitRequestData {
+  requestedAt: string; unlocksAt: string; feeling: string;
+  status: "pending" | "cancelled_by_user";
+  cancelledAt: string | null;
+  hoursRemaining: number; minutesRemaining: number; isUnlocked: boolean;
+}
+export interface ChallengeProgress { daysElapsed: number; daysRemaining: number; percentage: number; }
 export interface ChallengeData {
   id: string; durationDays: number; reason: string;
   status: "active" | "cancelled" | "completed";
   startedAt: string; endsAt: string;
   cancelledAt: string | null; completedAt: string | null; createdAt: string;
+  quitRequest: QuitRequestData | null;
   progress: ChallengeProgress;
 }
 
@@ -18,6 +25,10 @@ interface QuitAPI {
     create: (durationDays: number, reason: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData }>;
     active: () => Promise<{ ok?: boolean; error?: string; challenge: ChallengeData | null }>;
     cancel: (id: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData }>;
+    quitRequest: {
+      create: (id: string, feeling: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData }>;
+      cancel: (id: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData }>;
+    };
     history: () => Promise<{ ok?: boolean; error?: string; challenges?: ChallengeData[] }>;
   };
 }
@@ -35,6 +46,10 @@ export const ipc = {
     create: (durationDays: number, reason: string) => getQuit().challenge.create(durationDays, reason),
     active: () => getQuit().challenge.active(),
     cancel: (id: string) => getQuit().challenge.cancel(id),
+    quitRequest: {
+      create: (id: string, feeling: string) => getQuit().challenge.quitRequest.create(id, feeling),
+      cancel: (id: string) => getQuit().challenge.quitRequest.cancel(id),
+    },
     history: () => getQuit().challenge.history(),
   },
 };

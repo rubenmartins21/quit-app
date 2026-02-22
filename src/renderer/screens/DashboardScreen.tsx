@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ipc, ChallengeData } from "../lib/ipc";
 import { Button } from "../components/ui";
 import { Sidebar } from "../components/Sidebar";
+import { QuitFlowScreen } from "./QuitFlowScreen";
 import { AppScreen } from "../App";
 
 interface Props {
@@ -32,8 +33,8 @@ const dailyMessages = [
 export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
   const [loggingOut, setLoggingOut] = useState(false);
   const [challenge, setChallenge] = useState<ChallengeData | null | undefined>(undefined);
-  const [cancelling, setCancelling] = useState(false);
-  const [cancelConfirm, setCancelConfirm] = useState(false);
+  const [showQuitFlow, setShowQuitFlow] = useState(false);
+  const [cancellingQuit, setCancellingQuit] = useState(false);
 
   useEffect(() => {
     ipc.challenge.active().then(res => setChallenge(res.challenge ?? null));
@@ -44,17 +45,17 @@ export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
     await onLogout();
   }
 
-  async function handleCancel() {
+  async function handleCancelQuitRequest() {
     if (!challenge) return;
-    if (!cancelConfirm) { setCancelConfirm(true); return; }
-    setCancelling(true);
-    await ipc.challenge.cancel(challenge.id);
-    setChallenge(null);
-    setCancelling(false);
-    setCancelConfirm(false);
+    setCancellingQuit(true);
+    const res = await ipc.challenge.quitRequest.cancel(challenge.id);
+    if (res.ok && res.challenge) setChallenge(res.challenge);
+    setCancellingQuit(false);
   }
 
   const todayMsg = dailyMessages[new Date().getDay() % dailyMessages.length];
+  const qr = challenge?.quitRequest;
+  const hasPendingQuit = qr?.status === "pending";
 
   return (
     <div style={{ height: "100vh", display: "flex", background: "var(--white)", overflow: "hidden" }}>
@@ -62,19 +63,36 @@ export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
 
       <Sidebar active="dashboard" onNavigate={onNavigate} />
 
+      {showQuitFlow && challenge && (
+        <QuitFlowScreen
+          challenge={challenge}
+          onDone={(updated) => { setChallenge(updated); setShowQuitFlow(false); }}
+          onBack={() => setShowQuitFlow(false)}
+        />
+      )}
+
       <main style={{ flex: 1, padding: "52px 56px 40px", display: "flex", flexDirection: "column", overflowY: "auto" }}>
 
-        <p style={eyebrow}>{challenge ? "Desafio ativo" : "Sessão ativa"}</p>
+        <p style={eyebrow}>
+          {challenge ? (hasPendingQuit ? "Período de reflexão" : "Desafio ativo") : "Sessão ativa"}
+        </p>
 
         {challenge ? (
           <>
-            <h1 style={{ fontFamily: "var(--serif)", fontSize: "56px", color: "var(--gray-800)", fontWeight: 400, lineHeight: 1, marginBottom: "4px" }}>
+            <h1 style={{
+              fontFamily: "var(--serif)", fontSize: "56px", fontWeight: 400, lineHeight: 1, marginBottom: "4px",
+              color: hasPendingQuit ? "var(--gray-400)" : "var(--gray-800)", transition: "color 0.3s"
+            }}>
               {challenge.progress.daysElapsed}
             </h1>
             <p style={{ fontSize: "12px", color: "var(--gray-400)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "6px" }}>
               dias consecutivos
             </p>
-            <p style={{ fontSize: "13px", color: "var(--green)", marginBottom: "28px" }}>{todayMsg}</p>
+            <p style={{ fontSize: "13px", color: hasPendingQuit ? "var(--gray-400)" : "var(--green)", marginBottom: "28px" }}>
+              {hasPendingQuit
+                ? `Desistência registada. Desbloqueio em ${qr!.hoursRemaining}h.`
+                : todayMsg}
+            </p>
           </>
         ) : (
           <>
@@ -87,51 +105,62 @@ export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
 
         <div style={{ height: "1px", background: "var(--gray-200)", marginBottom: "28px" }} />
 
-        {/* Challenge card */}
         {challenge === undefined ? (
           <div style={card}><p style={{ fontSize: "12px", color: "var(--gray-400)" }}>A carregar...</p></div>
         ) : challenge ? (
-          <div style={card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
-              <div>
-                <p style={fieldLabel}>Progresso</p>
-                <p style={{ fontSize: "14px", color: "var(--gray-800)", marginTop: "2px" }}>
-                  {challenge.progress.daysElapsed} / {challenge.durationDays} dias
+          <>
+            {/* Pending quit banner */}
+            {hasPendingQuit && (
+              <div style={quitBanner}>
+                <div>
+                  <p style={quitBannerLabel}>Desistência pendente</p>
+                  <p style={quitBannerText}>
+                    Desbloqueio em <strong>{qr!.hoursRemaining > 0 ? `${qr!.hoursRemaining}h` : `${qr!.minutesRemaining} min`}</strong>.
+                    {" "}Se mudares de ideias, podes cancelar.
+                  </p>
+                </div>
+                <button onClick={handleCancelQuitRequest} disabled={cancellingQuit} style={cancelQuitBtn}>
+                  {cancellingQuit ? "..." : "Cancelar desistência"}
+                </button>
+              </div>
+            )}
+
+            <div style={card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
+                <div>
+                  <p style={fieldLabel}>Progresso</p>
+                  <p style={{ fontSize: "14px", color: "var(--gray-800)", marginTop: "2px" }}>
+                    {challenge.progress.daysElapsed} / {challenge.durationDays} dias
+                  </p>
+                </div>
+                <span style={badge}>
+                  {challenge.progress.daysRemaining} dia{challenge.progress.daysRemaining !== 1 ? "s" : ""} restante{challenge.progress.daysRemaining !== 1 ? "s" : ""}
+                </span>
+              </div>
+
+              <ProgressBar percentage={challenge.progress.percentage} />
+
+              <div style={{ marginTop: "20px", padding: "14px 16px", background: "var(--gray-50)", borderRadius: "var(--radius-sm)", borderLeft: "2px solid var(--gray-200)" }}>
+                <p style={{ ...fieldLabel, marginBottom: "6px" }}>O teu motivo</p>
+                <p style={{ fontSize: "12px", color: "var(--gray-600)", lineHeight: "1.6", fontStyle: "italic" }}>
+                  "{challenge.reason}"
                 </p>
               </div>
-              <span style={badge}>
-                {challenge.progress.daysRemaining} dia{challenge.progress.daysRemaining !== 1 ? "s" : ""} restante{challenge.progress.daysRemaining !== 1 ? "s" : ""}
-              </span>
-            </div>
 
-            <ProgressBar percentage={challenge.progress.percentage} />
-
-            <div style={{ marginTop: "20px", padding: "14px 16px", background: "var(--gray-50)", borderRadius: "var(--radius-sm)", borderLeft: "2px solid var(--gray-200)" }}>
-              <p style={{ ...fieldLabel, marginBottom: "6px" }}>O teu motivo</p>
-              <p style={{ fontSize: "12px", color: "var(--gray-600)", lineHeight: "1.6", fontStyle: "italic" }}>"{challenge.reason}"</p>
-            </div>
-
-            <div style={{ marginTop: "20px" }}>
-              {cancelConfirm ? (
-                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                  <p style={{ fontSize: "11px", color: "var(--gray-400)", flex: 1 }}>
-                    Tens a certeza? Perdes {challenge.progress.daysElapsed} dia(s) de progresso.
-                  </p>
-                  <button onClick={() => setCancelConfirm(false)} style={ghostBtn}>Não</button>
-                  <button onClick={handleCancel} disabled={cancelling} style={dangerBtn}>
-                    {cancelling ? "..." : "Sim, cancelar"}
+              {!hasPendingQuit && (
+                <div style={{ marginTop: "20px" }}>
+                  <button onClick={() => setShowQuitFlow(true)} style={quitBtn}>
+                    Tentar desistir
                   </button>
                 </div>
-              ) : (
-                <button onClick={handleCancel} style={ghostBtn}>Cancelar desafio</button>
               )}
             </div>
-          </div>
+          </>
         ) : (
           <div style={{ ...card, borderStyle: "dashed" }}>
             <p style={fieldLabel}>Sem desafio ativo</p>
             <p style={{ fontSize: "12px", color: "var(--gray-400)", lineHeight: "1.6", margin: "6px 0 20px" }}>
-              Cria um desafio para começar a controlar os teus hábitos digitais.
+              Cria um desafio para começar.
             </p>
             <div style={{ maxWidth: "200px" }}>
               <Button onClick={() => onNavigate("challenge")}>Criar desafio</Button>
@@ -163,5 +192,8 @@ const eyebrow: React.CSSProperties = { fontSize: "10px", letterSpacing: "0.2em",
 const card: React.CSSProperties = { padding: "20px 24px", border: "1px solid var(--gray-200)", borderRadius: "var(--radius-md)", background: "var(--gray-50)" };
 const fieldLabel: React.CSSProperties = { fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase", color: "var(--gray-400)" };
 const badge: React.CSSProperties = { fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--gray-400)", background: "var(--gray-200)", padding: "4px 10px", borderRadius: "99px", flexShrink: 0 };
-const ghostBtn: React.CSSProperties = { padding: "7px 14px", border: "1px solid var(--gray-200)", borderRadius: "var(--radius-sm)", fontFamily: "var(--mono)", fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--gray-600)", background: "transparent", cursor: "pointer" };
-const dangerBtn: React.CSSProperties = { ...ghostBtn, borderColor: "var(--red-muted)", color: "var(--red-muted)" };
+const quitBtn: React.CSSProperties = { padding: "7px 14px", border: "1px solid var(--gray-200)", borderRadius: "var(--radius-sm)", fontFamily: "var(--mono)", fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--gray-600)", background: "transparent", cursor: "pointer" };
+const cancelQuitBtn: React.CSSProperties = { padding: "8px 14px", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", fontFamily: "var(--mono)", fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--green)", background: "transparent", cursor: "pointer", flexShrink: 0 };
+const quitBanner: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", padding: "16px 20px", background: "#fdf8f0", border: "1px solid #e8d5a3", borderRadius: "var(--radius-md)", marginBottom: "12px" };
+const quitBannerLabel: React.CSSProperties = { fontSize: "10px", letterSpacing: "0.15em", textTransform: "uppercase", color: "#9a7a30", marginBottom: "4px" };
+const quitBannerText: React.CSSProperties = { fontSize: "12px", color: "#6b5520", lineHeight: "1.5" };
