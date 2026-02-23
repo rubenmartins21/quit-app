@@ -4,74 +4,51 @@ import { fileURLToPath } from "url";
 import { loadSession } from "./services/session.js";
 import { setToken } from "./services/apiClient.js";
 import { getOrCreateDeviceId } from "./services/device.js";
+import { loadBlockerState } from "./blocker/blockerService.js";
 
-// Register IPC handlers
+// IPC handlers — must be imported before window creation
 import "./ipc/auth.ipc.js";
 import "./ipc/challenge.ipc.js";
+import "./ipc/blocker.ipc.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
-const isDev = !!VITE_DEV_SERVER_URL;
-
-let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
-  mainWindow = new BrowserWindow({
-    width: 960,
-    height: 660,
-    minWidth: 720,
-    minHeight: 500,
+  const win = new BrowserWindow({
+    width: 960, height: 660, minWidth: 720, minHeight: 500,
     titleBarStyle: "hiddenInset",
     backgroundColor: "#f9f9f8",
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
-      contextIsolation: true,   // REQUIRED — renderer can't access Node
-      nodeIntegration: false,   // REQUIRED — no Node in renderer
-      sandbox: true,            // Extra isolation
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
       webSecurity: true,
     },
-    show: false, // Prevent white flash
+    show: false,
   });
 
-  // Hide menu bar
-  mainWindow.setMenuBarVisibility(false);
-
-  mainWindow.once("ready-to-show", () => {
-    mainWindow?.show();
-  });
-
-  // Open external links in browser, not in app
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  win.setMenuBarVisibility(false);
+  win.once("ready-to-show", () => win.show());
+  win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
   });
 
-  // Prevent navigation to external URLs
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (isDev && url.startsWith("http://localhost:5173")) return;
-    event.preventDefault();
-  });
-
-  if (isDev) {
-    mainWindow.loadURL(VITE_DEV_SERVER_URL!);
-    mainWindow.webContents.openDevTools({ mode: "detach" });
+  if (VITE_DEV_SERVER_URL) {
+    win.loadURL(VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
+    win.loadFile(path.join(__dirname, "../../dist/index.html"));
   }
 }
 
-app.on("ready", async () => {
-  // Ensure deviceId exists from first launch
+app.on("ready", () => {
   getOrCreateDeviceId();
-
-  // Restore session if available
   const token = loadSession();
-  if (token) {
-    setToken(token);
-    console.log("✅  Session restored from disk");
-  }
-
+  if (token) { setToken(token); console.log("✅ Session restored"); }
+  const blockerState = loadBlockerState();
+  if (blockerState.active) console.log("🔒 Blocker was active on last session");
   createWindow();
 });
 

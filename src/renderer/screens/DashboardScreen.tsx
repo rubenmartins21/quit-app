@@ -14,10 +14,7 @@ interface Props {
 function ProgressBar({ percentage }: { percentage: number }) {
   return (
     <div style={{ height: "3px", background: "var(--gray-200)", borderRadius: "99px", overflow: "hidden" }}>
-      <div style={{
-        height: "100%", width: `${Math.min(percentage, 100)}%`,
-        background: "var(--green)", borderRadius: "99px", transition: "width 0.6s ease"
-      }} />
+      <div style={{ height: "100%", width: `${Math.min(percentage, 100)}%`, background: "var(--green)", borderRadius: "99px", transition: "width 0.6s ease" }} />
     </div>
   );
 }
@@ -33,11 +30,13 @@ const dailyMessages = [
 export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
   const [loggingOut, setLoggingOut] = useState(false);
   const [challenge, setChallenge] = useState<ChallengeData | null | undefined>(undefined);
+  const [blockerActive, setBlockerActive] = useState(false);
   const [showQuitFlow, setShowQuitFlow] = useState(false);
   const [cancellingQuit, setCancellingQuit] = useState(false);
 
   useEffect(() => {
     ipc.challenge.active().then(res => setChallenge(res.challenge ?? null));
+    ipc.blocker.status().then(res => setBlockerActive(res.active));
   }, []);
 
   async function handleLogout() {
@@ -79,19 +78,14 @@ export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
 
         {challenge ? (
           <>
-            <h1 style={{
-              fontFamily: "var(--serif)", fontSize: "56px", fontWeight: 400, lineHeight: 1, marginBottom: "4px",
-              color: hasPendingQuit ? "var(--gray-400)" : "var(--gray-800)", transition: "color 0.3s"
-            }}>
+            <h1 style={{ fontFamily: "var(--serif)", fontSize: "56px", fontWeight: 400, lineHeight: 1, marginBottom: "4px", color: hasPendingQuit ? "var(--gray-400)" : "var(--gray-800)", transition: "color 0.3s" }}>
               {challenge.progress.daysElapsed}
             </h1>
             <p style={{ fontSize: "12px", color: "var(--gray-400)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "6px" }}>
               dias consecutivos
             </p>
             <p style={{ fontSize: "13px", color: hasPendingQuit ? "var(--gray-400)" : "var(--green)", marginBottom: "28px" }}>
-              {hasPendingQuit
-                ? `Desistência registada. Desbloqueio em ${qr!.hoursRemaining}h.`
-                : todayMsg}
+              {hasPendingQuit ? `Desistência registada. Desbloqueio em ${qr!.hoursRemaining}h.` : todayMsg}
             </p>
           </>
         ) : (
@@ -109,7 +103,6 @@ export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
           <div style={card}><p style={{ fontSize: "12px", color: "var(--gray-400)" }}>A carregar...</p></div>
         ) : challenge ? (
           <>
-            {/* Pending quit banner */}
             {hasPendingQuit && (
               <div style={quitBanner}>
                 <div>
@@ -168,14 +161,23 @@ export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
           </div>
         )}
 
-        {/* Adult Filter placeholder */}
-        <div style={{ ...card, marginTop: "12px", opacity: 0.5 }}>
+        {/* Adult Filter status — real state */}
+        <div style={{ ...card, marginTop: "12px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <p style={fieldLabel}>Adult Filter</p>
-              <p style={{ fontSize: "13px", color: "var(--gray-600)", marginTop: "2px" }}>Bloqueio DNS + hosts file</p>
+              <p style={{ fontSize: "13px", color: blockerActive ? "var(--green)" : "var(--gray-600)", marginTop: "2px", transition: "color 0.3s" }}>
+                {blockerActive ? "Ativo — DNS + hosts file" : "Inativo"}
+              </p>
             </div>
-            <span style={badge}>Em breve</span>
+            <span style={{
+              ...badge,
+              color: blockerActive ? "var(--green)" : "var(--gray-400)",
+              background: blockerActive ? "var(--green-subtle)" : "var(--gray-200)",
+              transition: "all 0.3s",
+            }}>
+              {blockerActive ? "ON" : "OFF"}
+            </span>
           </div>
         </div>
 

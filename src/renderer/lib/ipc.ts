@@ -22,7 +22,7 @@ interface QuitAPI {
     logout: () => Promise<{ ok?: boolean }>;
   };
   challenge: {
-    create: (durationDays: number, reason: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData }>;
+    create: (durationDays: number, reason: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData; blockerActive?: boolean }>;
     active: () => Promise<{ ok?: boolean; error?: string; challenge: ChallengeData | null }>;
     cancel: (id: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData }>;
     quitRequest: {
@@ -30,6 +30,9 @@ interface QuitAPI {
       cancel: (id: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData }>;
     };
     history: () => Promise<{ ok?: boolean; error?: string; challenges?: ChallengeData[] }>;
+  };
+  blocker: {
+    status: () => Promise<{ ok?: boolean; active: boolean; challengeId: string | null }>;
   };
 }
 
@@ -51,5 +54,8 @@ export const ipc = {
       cancel: (id: string) => getQuit().challenge.quitRequest.cancel(id),
     },
     history: () => getQuit().challenge.history(),
+  },
+  blocker: {
+    status: () => getQuit().blocker.status(),
   },
 };

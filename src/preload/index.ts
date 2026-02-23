@@ -12,6 +12,15 @@ contextBridge.exposeInMainWorld("quit", {
       ipcRenderer.invoke("challenge:create", { durationDays, reason }),
     active: () => ipcRenderer.invoke("challenge:active"),
     cancel: (id: string) => ipcRenderer.invoke("challenge:cancel", id),
+    quitRequest: {
+      create: (id: string, feeling: string) =>
+        ipcRenderer.invoke("challenge:quit-request:create", { id, feeling }),
+      cancel: (id: string) =>
+        ipcRenderer.invoke("challenge:quit-request:cancel", id),
+    },
     history: () => ipcRenderer.invoke("challenge:history"),
+  },
+  blocker: {
+    status: () => ipcRenderer.invoke("blocker:status"),
   },
 });

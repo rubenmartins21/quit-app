@@ -4,6 +4,8 @@ const path = require("path");
 const url = require("url");
 const fs = require("fs");
 const crypto = require("crypto");
+const child_process = require("child_process");
+const os = require("os");
 var _documentCurrentScript = typeof document !== "undefined" ? document.currentScript : null;
 const sessionFile = () => path.join(electron.app.getPath("userData"), "session.json");
 function saveSession(token) {
@@ -82,6 +84,250 @@ function getDevicePlatform() {
   if (process.platform === "win32") return "windows";
   if (process.platform === "darwin") return "mac";
   return "linux";
+}
+const ADULT_DOMAINS = [
+  // Major adult platforms
+  "pornhub.com",
+  "www.pornhub.com",
+  "xvideos.com",
+  "www.xvideos.com",
+  "xnxx.com",
+  "www.xnxx.com",
+  "xhamster.com",
+  "www.xhamster.com",
+  "redtube.com",
+  "www.redtube.com",
+  "youporn.com",
+  "www.youporn.com",
+  "tube8.com",
+  "www.tube8.com",
+  "spankbang.com",
+  "www.spankbang.com",
+  "tnaflix.com",
+  "www.tnaflix.com",
+  "porntrex.com",
+  "www.porntrex.com",
+  "beeg.com",
+  "www.beeg.com",
+  "drtuber.com",
+  "www.drtuber.com",
+  "nuvid.com",
+  "www.nuvid.com",
+  "txxx.com",
+  "www.txxx.com",
+  "hclips.com",
+  "www.hclips.com",
+  "hdzog.com",
+  "www.hdzog.com",
+  "vporn.com",
+  "www.vporn.com",
+  "ok.xxx",
+  "4tube.com",
+  "www.4tube.com",
+  "faphouse.com",
+  "www.faphouse.com",
+  // Social/Reddit-adjacent adult
+  "onlyfans.com",
+  "www.onlyfans.com",
+  "fansly.com",
+  "www.fansly.com",
+  "manyvids.com",
+  "www.manyvids.com",
+  // Image boards / content
+  "rule34.xxx",
+  "gelbooru.com",
+  "www.gelbooru.com",
+  "sankakucomplex.com",
+  "nhentai.net",
+  "www.nhentai.net",
+  "hentaifox.com",
+  "hanime.tv"
+];
+const SAFE_DNS_PRIMARY = "1.1.1.3";
+const SAFE_DNS_SECONDARY = "1.0.0.3";
+const HOSTS_MARKER_START = "# QUIT-BLOCKER-START";
+const HOSTS_MARKER_END = "# QUIT-BLOCKER-END";
+function getScriptPath() {
+  return path.join(electron.app.getPath("userData"), "quit-blocker-helper.ps1");
+}
+function getResultPath() {
+  return path.join(os.tmpdir(), "quit-blocker-result.json");
+}
+function buildScript() {
+  const hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts";
+  const domainLines = ADULT_DOMAINS.map((d) => `0.0.0.0 ${d}`).join("\r\n");
+  return `param([string]$Action, [string]$ResultPath)
+
+$result = @{ ok = $true; hostsActive = $false; dnsActive = $false; error = "" }
+
+$hostsPath = "${hostsPath.replace(/\\/g, "\\\\")}"
+$markerStart = "${HOSTS_MARKER_START}"
+$markerEnd = "${HOSTS_MARKER_END}"
+$primaryDNS = "${SAFE_DNS_PRIMARY}"
+$secondaryDNS = "${SAFE_DNS_SECONDARY}"
+
+function Flush-DNS { try { ipconfig /flushdns | Out-Null } catch {} }
+
+function Get-ActiveAdapters {
+  try { return (Get-NetAdapter | Where-Object { $_.Status -eq "Up" }).Name }
+  catch { return @("Wi-Fi", "Ethernet") }
+}
+
+function Activate-Block {
+  # Hosts file
+  $content = ""
+  if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
+  $startIdx = $content.IndexOf($markerStart)
+  $endIdx = $content.IndexOf($markerEnd)
+  if ($startIdx -ge 0 -and $endIdx -ge 0) {
+    $content = $content.Substring(0, $startIdx) + $content.Substring($endIdx + $markerEnd.Length)
+  }
+  $block = "\`r\`n\`r\`n" + $markerStart + "\`r\`n${domainLines}\`r\`n" + $markerEnd + "\`r\`n"
+  $content = $content.TrimEnd() + $block
+  [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::UTF8)
+
+  # DNS
+  $adapters = Get-ActiveAdapters
+  foreach ($a in $adapters) {
+    try { netsh interface ip set dns "$a" static $primaryDNS primary | Out-Null } catch {}
+    try { netsh interface ip add dns "$a" $secondaryDNS index=2 | Out-Null } catch {}
+  }
+  Flush-DNS
+}
+
+function Deactivate-Block {
+  # Hosts file
+  $content = ""
+  if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
+  $startIdx = $content.IndexOf($markerStart)
+  $endIdx = $content.IndexOf($markerEnd)
+  if ($startIdx -ge 0 -and $endIdx -ge 0) {
+    $content = $content.Substring(0, $startIdx) + $content.Substring($endIdx + $markerEnd.Length)
+    $content = $content.TrimEnd() + "\`r\`n"
+    [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::UTF8)
+  }
+
+  # DNS restore to DHCP
+  $adapters = Get-ActiveAdapters
+  foreach ($a in $adapters) {
+    try { netsh interface ip set dns "$a" dhcp | Out-Null } catch {}
+  }
+  Flush-DNS
+}
+
+function Get-Status {
+  $content = ""
+  if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
+  $result["hostsActive"] = $content.Contains($markerStart)
+  $dnsOut = netsh interface ip show dns 2>$null | Out-String
+  $result["dnsActive"] = $dnsOut.Contains($primaryDNS)
+}
+
+try {
+  switch ($Action) {
+    "activate"   { Activate-Block }
+    "deactivate" { Deactivate-Block }
+    "status"     { Get-Status }
+    default { $result["ok"] = $false; $result["error"] = "Unknown action: $Action" }
+  }
+} catch {
+  $result["ok"] = $false
+  $result["error"] = $_.Exception.Message
+}
+
+$result | ConvertTo-Json | Set-Content -Path $ResultPath -Encoding UTF8
+`;
+}
+async function runElevated(action) {
+  const resultPath = getResultPath();
+  try {
+    if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
+  } catch {
+  }
+  try {
+    fs.writeFileSync(getScriptPath(), buildScript(), "utf-8");
+  } catch (err) {
+    return { ok: false, error: `Failed to write helper script: ${err}` };
+  }
+  const scriptPath = getScriptPath();
+  return new Promise((resolve) => {
+    var _a;
+    const ps = child_process.spawn("powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File ""${scriptPath}"" -Action ${action} -ResultPath ""${resultPath}""'`
+    ]);
+    let stderr = "";
+    (_a = ps.stderr) == null ? void 0 : _a.on("data", (d) => {
+      stderr += d.toString();
+    });
+    ps.on("close", (code) => {
+      try {
+        if (!fs.existsSync(resultPath)) {
+          const msg = code !== 0 ? "Operação cancelada ou recusada pelo utilizador." : "Sem resultado — o script pode ter falhado silenciosamente.";
+          resolve({ ok: false, error: msg });
+          return;
+        }
+        const raw = fs.readFileSync(resultPath, "utf-8");
+        resolve(JSON.parse(raw));
+      } catch (err) {
+        resolve({ ok: false, error: `Failed to read result: ${err}` });
+      }
+    });
+    ps.on("error", (err) => resolve({ ok: false, error: err.message }));
+  });
+}
+function getStatePath() {
+  return path.join(electron.app.getPath("userData"), "blocker-state.json");
+}
+function loadBlockerState() {
+  try {
+    const raw = fs.readFileSync(getStatePath(), "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return { active: false, activatedAt: null, challengeId: null };
+  }
+}
+function saveBlockerState(state) {
+  fs.writeFileSync(getStatePath(), JSON.stringify(state, null, 2), "utf-8");
+}
+async function activateBlocker(challengeId) {
+  console.log("🔒 Activating blocker for challenge:", challengeId);
+  const result = await runElevated("activate");
+  if (result.ok) {
+    saveBlockerState({
+      active: true,
+      activatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      challengeId
+    });
+    console.log("✅ Blocker activated");
+  } else {
+    console.error("❌ Blocker activation failed:", result.error);
+  }
+  return result;
+}
+async function deactivateBlocker() {
+  console.log("🔓 Deactivating blocker...");
+  const result = await runElevated("deactivate");
+  if (result.ok) {
+    saveBlockerState({ active: false, activatedAt: null, challengeId: null });
+    console.log("✅ Blocker deactivated");
+  } else {
+    console.error("❌ Blocker deactivation failed:", result.error);
+  }
+  return result;
+}
+async function getBlockerStatus() {
+  const state = loadBlockerState();
+  if (!state.active) return { active: false, hostsActive: false, dnsActive: false };
+  const result = await runElevated("status");
+  return {
+    active: state.active,
+    hostsActive: result.hostsActive ?? false,
+    dnsActive: result.dnsActive ?? false
+  };
 }
 var util;
 (function(util2) {
@@ -3681,14 +3927,26 @@ electron.ipcMain.handle("auth:logout", async () => {
   setToken(null);
   return { ok: true };
 });
-const CreateSchema = objectType({ durationDays: numberType().int().min(7), reason: stringType().min(10).max(500).trim() });
-const QuitRequestSchema = objectType({ id: stringType(), feeling: stringType().min(5).max(1e3).trim() });
+const CreateSchema = objectType({
+  durationDays: numberType().int().min(7),
+  reason: stringType().min(10).max(500).trim()
+});
+const QuitRequestSchema = objectType({
+  id: stringType(),
+  feeling: stringType().min(5).max(1e3).trim()
+});
 electron.ipcMain.handle("challenge:create", async (_e, payload) => {
   var _a;
   const parsed = CreateSchema.safeParse(payload);
   if (!parsed.success) return { error: ((_a = parsed.error.errors[0]) == null ? void 0 : _a.message) ?? "Dados inválidos" };
   const res = await createChallenge(parsed.data.durationDays, parsed.data.reason);
-  return res.error ? { error: res.error } : { ok: true, challenge: res.data };
+  if (res.error || !res.data) return { error: res.error ?? "Erro ao criar desafio" };
+  console.log("🔒 Challenge created, activating blocker...");
+  const blockerResult = await activateBlocker(res.data.id);
+  if (!blockerResult.ok) {
+    console.warn("⚠️  Blocker activation failed:", blockerResult.error);
+  }
+  return { ok: true, challenge: res.data, blockerActive: blockerResult.ok };
 });
 electron.ipcMain.handle("challenge:active", async () => {
   var _a;
@@ -3698,7 +3956,13 @@ electron.ipcMain.handle("challenge:active", async () => {
 electron.ipcMain.handle("challenge:cancel", async (_e, id) => {
   if (typeof id !== "string") return { error: "ID inválido" };
   const res = await cancelChallenge(id);
-  return res.error ? { error: res.error } : { ok: true, challenge: res.data };
+  if (res.error || !res.data) return { error: res.error ?? "Erro ao cancelar" };
+  console.log("🔓 Challenge cancelled, deactivating blocker...");
+  const blockerResult = await deactivateBlocker();
+  if (!blockerResult.ok) {
+    console.warn("⚠️  Blocker deactivation failed:", blockerResult.error);
+  }
+  return { ok: true, challenge: res.data };
 });
 electron.ipcMain.handle("challenge:quit-request:create", async (_e, payload) => {
   var _a;
@@ -3717,12 +3981,27 @@ electron.ipcMain.handle("challenge:history", async () => {
   const res = await getChallengeHistory();
   return res.error ? { error: res.error } : { ok: true, challenges: ((_a = res.data) == null ? void 0 : _a.challenges) ?? [] };
 });
+electron.ipcMain.handle("blocker:status", async () => {
+  const state = loadBlockerState();
+  return { ok: true, active: state.active, challengeId: state.challengeId };
+});
+electron.ipcMain.handle("blocker:activate", async (_e, challengeId) => {
+  if (typeof challengeId !== "string") return { error: "challengeId inválido" };
+  const result = await activateBlocker(challengeId);
+  return result.ok ? { ok: true } : { error: result.error ?? "Falha ao ativar bloqueio" };
+});
+electron.ipcMain.handle("blocker:deactivate", async () => {
+  const result = await deactivateBlocker();
+  return result.ok ? { ok: true } : { error: result.error ?? "Falha ao desativar bloqueio" };
+});
+electron.ipcMain.handle("blocker:full-status", async () => {
+  const status = await getBlockerStatus();
+  return { ok: true, ...status };
+});
 const __dirname$1 = path.dirname(url.fileURLToPath(typeof document === "undefined" ? require("url").pathToFileURL(__filename).href : _documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === "SCRIPT" && _documentCurrentScript.src || new URL("index.js", document.baseURI).href));
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
-const isDev = !!VITE_DEV_SERVER_URL;
-let mainWindow = null;
 function createWindow() {
-  mainWindow = new electron.BrowserWindow({
+  const win = new electron.BrowserWindow({
     width: 960,
     height: 660,
     minWidth: 720,
@@ -3732,42 +4011,33 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname$1, "../preload/index.js"),
       contextIsolation: true,
-      // REQUIRED — renderer can't access Node
       nodeIntegration: false,
-      // REQUIRED — no Node in renderer
       sandbox: true,
-      // Extra isolation
       webSecurity: true
     },
     show: false
-    // Prevent white flash
   });
-  mainWindow.setMenuBarVisibility(false);
-  mainWindow.once("ready-to-show", () => {
-    mainWindow == null ? void 0 : mainWindow.show();
-  });
-  mainWindow.webContents.setWindowOpenHandler(({ url: url2 }) => {
+  win.setMenuBarVisibility(false);
+  win.once("ready-to-show", () => win.show());
+  win.webContents.setWindowOpenHandler(({ url: url2 }) => {
     electron.shell.openExternal(url2);
     return { action: "deny" };
   });
-  mainWindow.webContents.on("will-navigate", (event, url2) => {
-    if (isDev && url2.startsWith("http://localhost:5173")) return;
-    event.preventDefault();
-  });
-  if (isDev) {
-    mainWindow.loadURL(VITE_DEV_SERVER_URL);
-    mainWindow.webContents.openDevTools({ mode: "detach" });
+  if (VITE_DEV_SERVER_URL) {
+    win.loadURL(VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname$1, "../../dist/index.html"));
+    win.loadFile(path.join(__dirname$1, "../../dist/index.html"));
   }
 }
-electron.app.on("ready", async () => {
+electron.app.on("ready", () => {
   getOrCreateDeviceId();
   const token = loadSession();
   if (token) {
     setToken(token);
-    console.log("✅  Session restored from disk");
+    console.log("✅ Session restored");
   }
+  const blockerState = loadBlockerState();
+  if (blockerState.active) console.log("🔒 Blocker was active on last session");
   createWindow();
 });
 electron.app.on("window-all-closed", () => {
