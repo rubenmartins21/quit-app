@@ -1,17 +1,19 @@
-/**
- * elevatedHelper — runs blocker operations with UAC elevation on Windows.
- * Writes a self-contained PowerShell script and launches it as admin via UAC.
- */
-
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import os from "os";
 import { app } from "electron";
-import { ADULT_DOMAINS, SAFE_DNS_PRIMARY, SAFE_DNS_SECONDARY, HOSTS_MARKER_START, HOSTS_MARKER_END } from "./blocklist.js";
+import {
+  ADULT_DOMAINS,
+  SAFE_DNS_PRIMARY,
+  SAFE_DNS_SECONDARY,
+  SAFE_DNS_PRIMARY_V6,
+  SAFE_DNS_SECONDARY_V6,
+  HOSTS_MARKER_START,
+  HOSTS_MARKER_END,
+} from "./blocklist.js";
 
 export type BlockerAction = "activate" | "deactivate" | "status";
-
 export interface HelperResult {
   ok: boolean;
   hostsActive?: boolean;
@@ -22,7 +24,6 @@ export interface HelperResult {
 function getScriptPath(): string {
   return path.join(app.getPath("userData"), "quit-blocker-helper.ps1");
 }
-
 function getResultPath(): string {
   return path.join(os.tmpdir(), "quit-blocker-result.json");
 }
@@ -34,12 +35,13 @@ function buildScript(): string {
   return `param([string]$Action, [string]$ResultPath)
 
 $result = @{ ok = $true; hostsActive = $false; dnsActive = $false; error = "" }
-
 $hostsPath = "${hostsPath.replace(/\\/g, "\\\\")}"
 $markerStart = "${HOSTS_MARKER_START}"
 $markerEnd = "${HOSTS_MARKER_END}"
 $primaryDNS = "${SAFE_DNS_PRIMARY}"
 $secondaryDNS = "${SAFE_DNS_SECONDARY}"
+$primaryDNSv6 = "${SAFE_DNS_PRIMARY_V6}"
+$secondaryDNSv6 = "${SAFE_DNS_SECONDARY_V6}"
 
 function Flush-DNS { try { ipconfig /flushdns | Out-Null } catch {} }
 
@@ -48,25 +50,37 @@ function Get-ActiveAdapters {
   catch { return @("Wi-Fi", "Ethernet") }
 }
 
-function Activate-Block {
-  # Hosts file
-  $content = ""
-  if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
+function Remove-QuitEntries([string]$content) {
   $startIdx = $content.IndexOf($markerStart)
   $endIdx = $content.IndexOf($markerEnd)
   if ($startIdx -ge 0 -and $endIdx -ge 0) {
     $content = $content.Substring(0, $startIdx) + $content.Substring($endIdx + $markerEnd.Length)
   }
-  $block = "\`r\`n\`r\`n" + $markerStart + "\`r\`n${domainLines}\`r\`n" + $markerEnd + "\`r\`n"
-  $content = $content.TrimEnd() + $block
-  [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::UTF8)
+  return $content.TrimEnd() + "\`r\`n"
+}
 
-  # DNS
+function Activate-Block {
+  # Hosts file — usar ASCII para garantir compatibilidade com Windows
+  $content = ""
+  if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
+  $content = Remove-QuitEntries $content
+  $block = "\`r\`n" + $markerStart + "\`r\`n${domainLines}\`r\`n" + $markerEnd + "\`r\`n"
+  $content = $content.TrimEnd() + $block
+  [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
+
+  # DNS IPv4
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
-    try { netsh interface ip set dns "$a" static $primaryDNS primary | Out-Null } catch {}
-    try { netsh interface ip add dns "$a" $secondaryDNS index=2 | Out-Null } catch {}
+    try { netsh interface ip set dns "$a" static $primaryDNS primary validate=no | Out-Null } catch {}
+    try { netsh interface ip add dns "$a" $secondaryDNS index=2 validate=no | Out-Null } catch {}
   }
+
+  # DNS IPv6
+  foreach ($a in $adapters) {
+    try { netsh interface ipv6 set dns "$a" static $primaryDNSv6 primary validate=no | Out-Null } catch {}
+    try { netsh interface ipv6 add dns "$a" $secondaryDNSv6 index=2 validate=no | Out-Null } catch {}
+  }
+
   Flush-DNS
 }
 
@@ -74,19 +88,20 @@ function Deactivate-Block {
   # Hosts file
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
-  $startIdx = $content.IndexOf($markerStart)
-  $endIdx = $content.IndexOf($markerEnd)
-  if ($startIdx -ge 0 -and $endIdx -ge 0) {
-    $content = $content.Substring(0, $startIdx) + $content.Substring($endIdx + $markerEnd.Length)
-    $content = $content.TrimEnd() + "\`r\`n"
-    [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::UTF8)
-  }
+  $content = Remove-QuitEntries $content
+  [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
 
-  # DNS restore to DHCP
+  # DNS IPv4 restore to DHCP
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
     try { netsh interface ip set dns "$a" dhcp | Out-Null } catch {}
   }
+
+  # DNS IPv6 restore to DHCP
+  foreach ($a in $adapters) {
+    try { netsh interface ipv6 set dns "$a" dhcp | Out-Null } catch {}
+  }
+
   Flush-DNS
 }
 
@@ -116,11 +131,8 @@ $result | ConvertTo-Json | Set-Content -Path $ResultPath -Encoding UTF8
 
 export async function runElevated(action: BlockerAction): Promise<HelperResult> {
   const resultPath = getResultPath();
-
-  // Clean previous result
   try { if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath); } catch {}
 
-  // Write helper script
   try {
     fs.writeFileSync(getScriptPath(), buildScript(), "utf-8");
   } catch (err) {
@@ -130,7 +142,6 @@ export async function runElevated(action: BlockerAction): Promise<HelperResult> 
   const scriptPath = getScriptPath();
 
   return new Promise((resolve) => {
-    // Launch PowerShell as admin via Start-Process -Verb RunAs (triggers UAC prompt)
     const ps = spawn("powershell", [
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
@@ -138,20 +149,13 @@ export async function runElevated(action: BlockerAction): Promise<HelperResult> 
       `Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File ""${scriptPath}"" -Action ${action} -ResultPath ""${resultPath}""'`,
     ]);
 
-    let stderr = "";
-    ps.stderr?.on("data", (d) => { stderr += d.toString(); });
-
     ps.on("close", (code) => {
       try {
         if (!fs.existsSync(resultPath)) {
-          const msg = code !== 0
-            ? "Operação cancelada ou recusada pelo utilizador."
-            : "Sem resultado — o script pode ter falhado silenciosamente.";
-          resolve({ ok: false, error: msg });
+          resolve({ ok: false, error: code !== 0 ? "Operação cancelada pelo utilizador." : "Script falhou silenciosamente." });
           return;
         }
-        const raw = fs.readFileSync(resultPath, "utf-8");
-        resolve(JSON.parse(raw) as HelperResult);
+        resolve(JSON.parse(fs.readFileSync(resultPath, "utf-8")) as HelperResult);
       } catch (err) {
         resolve({ ok: false, error: `Failed to read result: ${err}` });
       }

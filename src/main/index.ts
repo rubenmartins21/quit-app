@@ -2,17 +2,48 @@ import { app, BrowserWindow, shell } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
 import { loadSession } from "./services/session.js";
-import { setToken } from "./services/apiClient.js";
+import { setToken, getActiveChallenge } from "./services/apiClient.js";
 import { getOrCreateDeviceId } from "./services/device.js";
-import { loadBlockerState } from "./blocker/blockerService.js";
+import { loadBlockerState, loadAndRestoreInterceptor, deactivateBlocker } from "./blocker/blockerService.js";
 
-// IPC handlers — must be imported before window creation
 import "./ipc/auth.ipc.js";
 import "./ipc/challenge.ipc.js";
 import "./ipc/blocker.ipc.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+const BLOCKER_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+
+async function syncBlockerInBackground(): Promise<void> {
+  const state = loadBlockerState();
+  if (!state.active) return;
+
+  // Sem sessão → não conseguimos verificar o backend → mantém bloqueio
+  const session = loadSession();
+  if (!session) {
+    console.log("⏰ Sync: no session — keeping blocker active");
+    return;
+  }
+
+  try {
+    const res = await getActiveChallenge();
+
+    // Erro de rede — mantém bloqueio ativo por segurança
+    if (res.error) {
+      console.warn("⏰ Sync: backend unreachable, keeping blocker active");
+      return;
+    }
+
+    const challenge = res.data?.challenge ?? null;
+
+    if (challenge === null || challenge.status !== "active") {
+      console.log("⏰ Sync: no active challenge — deactivating blocker");
+      await deactivateBlocker();
+    }
+  } catch (err) {
+    console.warn("⏰ Sync failed:", err);
+  }
+}
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -43,12 +74,23 @@ function createWindow(): void {
   }
 }
 
-app.on("ready", () => {
+app.on("ready", async () => {
   getOrCreateDeviceId();
+
   const token = loadSession();
-  if (token) { setToken(token); console.log("✅ Session restored"); }
-  const blockerState = loadBlockerState();
-  if (blockerState.active) console.log("🔒 Blocker was active on last session");
+  if (token) {
+    setToken(token);
+    console.log("✅ Session restored");
+  }
+
+  loadAndRestoreInterceptor();
+
+  // Sync imediato — desativa bloqueio órfão logo ao arrancar
+  await syncBlockerInBackground();
+
+  // Sync periódico a cada 5 minutos
+  setInterval(syncBlockerInBackground, BLOCKER_SYNC_INTERVAL_MS);
+
   createWindow();
 });
 

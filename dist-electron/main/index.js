@@ -105,46 +105,74 @@ const ADULT_DOMAINS = [
   "www.spankbang.com",
   "tnaflix.com",
   "www.tnaflix.com",
-  "porntrex.com",
-  "www.porntrex.com",
   "beeg.com",
   "www.beeg.com",
   "drtuber.com",
   "www.drtuber.com",
-  "nuvid.com",
-  "www.nuvid.com",
   "txxx.com",
   "www.txxx.com",
-  "hclips.com",
-  "www.hclips.com",
-  "hdzog.com",
-  "www.hdzog.com",
   "vporn.com",
   "www.vporn.com",
   "ok.xxx",
-  "4tube.com",
-  "www.4tube.com",
-  "faphouse.com",
-  "www.faphouse.com",
-  // Social/Reddit-adjacent adult
   "onlyfans.com",
   "www.onlyfans.com",
   "fansly.com",
   "www.fansly.com",
   "manyvids.com",
   "www.manyvids.com",
-  // Image boards / content
+  "chaturbate.com",
+  "www.chaturbate.com",
+  "cam4.com",
+  "www.cam4.com",
+  "stripchat.com",
+  "www.stripchat.com",
+  "bongacams.com",
+  "www.bongacams.com",
+  "myfreecams.com",
+  "www.myfreecams.com",
   "rule34.xxx",
   "gelbooru.com",
   "www.gelbooru.com",
-  "sankakucomplex.com",
   "nhentai.net",
   "www.nhentai.net",
   "hentaifox.com",
-  "hanime.tv"
+  "hanime.tv",
+  // RedGifs — principal host de GIFs adultos embebidos no Reddit
+  "redgifs.com",
+  "www.redgifs.com",
+  "i.redgifs.com",
+  "thumbs.redgifs.com",
+  "api.redgifs.com",
+  "v3.redgifs.com",
+  // Imgur adulto
+  "i.imgur.com",
+  // Reddit media CDNs — TODOS os subdomínios conhecidos
+  "i.redd.it",
+  // imagens diretas
+  "v.redd.it",
+  // vídeos
+  "preview.redd.it",
+  // previews/miniaturas — causa principal do problema
+  "external-preview.redd.it",
+  // previews de links externos
+  "i.redditstatic.com",
+  // imagens estáticas do Reddit
+  "redditmedia.com",
+  "i.redditmedia.com",
+  "g.redditmedia.com",
+  "styles.redditmedia.com",
+  "b.thumbs.redditmedia.com",
+  "a.thumbs.redditmedia.com",
+  "thumbs.redditmedia.com",
+  // Twitter/X media CDNs
+  "pbs.twimg.com",
+  "video.twimg.com",
+  "ton.twimg.com"
 ];
 const SAFE_DNS_PRIMARY = "1.1.1.3";
 const SAFE_DNS_SECONDARY = "1.0.0.3";
+const SAFE_DNS_PRIMARY_V6 = "2606:4700:4700::1113";
+const SAFE_DNS_SECONDARY_V6 = "2606:4700:4700::1003";
 const HOSTS_MARKER_START = "# QUIT-BLOCKER-START";
 const HOSTS_MARKER_END = "# QUIT-BLOCKER-END";
 function getScriptPath() {
@@ -159,12 +187,13 @@ function buildScript() {
   return `param([string]$Action, [string]$ResultPath)
 
 $result = @{ ok = $true; hostsActive = $false; dnsActive = $false; error = "" }
-
 $hostsPath = "${hostsPath.replace(/\\/g, "\\\\")}"
 $markerStart = "${HOSTS_MARKER_START}"
 $markerEnd = "${HOSTS_MARKER_END}"
 $primaryDNS = "${SAFE_DNS_PRIMARY}"
 $secondaryDNS = "${SAFE_DNS_SECONDARY}"
+$primaryDNSv6 = "${SAFE_DNS_PRIMARY_V6}"
+$secondaryDNSv6 = "${SAFE_DNS_SECONDARY_V6}"
 
 function Flush-DNS { try { ipconfig /flushdns | Out-Null } catch {} }
 
@@ -173,25 +202,37 @@ function Get-ActiveAdapters {
   catch { return @("Wi-Fi", "Ethernet") }
 }
 
-function Activate-Block {
-  # Hosts file
-  $content = ""
-  if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
+function Remove-QuitEntries([string]$content) {
   $startIdx = $content.IndexOf($markerStart)
   $endIdx = $content.IndexOf($markerEnd)
   if ($startIdx -ge 0 -and $endIdx -ge 0) {
     $content = $content.Substring(0, $startIdx) + $content.Substring($endIdx + $markerEnd.Length)
   }
-  $block = "\`r\`n\`r\`n" + $markerStart + "\`r\`n${domainLines}\`r\`n" + $markerEnd + "\`r\`n"
-  $content = $content.TrimEnd() + $block
-  [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::UTF8)
+  return $content.TrimEnd() + "\`r\`n"
+}
 
-  # DNS
+function Activate-Block {
+  # Hosts file — usar ASCII para garantir compatibilidade com Windows
+  $content = ""
+  if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
+  $content = Remove-QuitEntries $content
+  $block = "\`r\`n" + $markerStart + "\`r\`n${domainLines}\`r\`n" + $markerEnd + "\`r\`n"
+  $content = $content.TrimEnd() + $block
+  [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
+
+  # DNS IPv4
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
-    try { netsh interface ip set dns "$a" static $primaryDNS primary | Out-Null } catch {}
-    try { netsh interface ip add dns "$a" $secondaryDNS index=2 | Out-Null } catch {}
+    try { netsh interface ip set dns "$a" static $primaryDNS primary validate=no | Out-Null } catch {}
+    try { netsh interface ip add dns "$a" $secondaryDNS index=2 validate=no | Out-Null } catch {}
   }
+
+  # DNS IPv6
+  foreach ($a in $adapters) {
+    try { netsh interface ipv6 set dns "$a" static $primaryDNSv6 primary validate=no | Out-Null } catch {}
+    try { netsh interface ipv6 add dns "$a" $secondaryDNSv6 index=2 validate=no | Out-Null } catch {}
+  }
+
   Flush-DNS
 }
 
@@ -199,19 +240,20 @@ function Deactivate-Block {
   # Hosts file
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
-  $startIdx = $content.IndexOf($markerStart)
-  $endIdx = $content.IndexOf($markerEnd)
-  if ($startIdx -ge 0 -and $endIdx -ge 0) {
-    $content = $content.Substring(0, $startIdx) + $content.Substring($endIdx + $markerEnd.Length)
-    $content = $content.TrimEnd() + "\`r\`n"
-    [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::UTF8)
-  }
+  $content = Remove-QuitEntries $content
+  [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
 
-  # DNS restore to DHCP
+  # DNS IPv4 restore to DHCP
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
     try { netsh interface ip set dns "$a" dhcp | Out-Null } catch {}
   }
+
+  # DNS IPv6 restore to DHCP
+  foreach ($a in $adapters) {
+    try { netsh interface ipv6 set dns "$a" dhcp | Out-Null } catch {}
+  }
+
   Flush-DNS
 }
 
@@ -251,7 +293,6 @@ async function runElevated(action) {
   }
   const scriptPath = getScriptPath();
   return new Promise((resolve) => {
-    var _a;
     const ps = child_process.spawn("powershell", [
       "-NoProfile",
       "-ExecutionPolicy",
@@ -259,19 +300,13 @@ async function runElevated(action) {
       "-Command",
       `Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File ""${scriptPath}"" -Action ${action} -ResultPath ""${resultPath}""'`
     ]);
-    let stderr = "";
-    (_a = ps.stderr) == null ? void 0 : _a.on("data", (d) => {
-      stderr += d.toString();
-    });
     ps.on("close", (code) => {
       try {
         if (!fs.existsSync(resultPath)) {
-          const msg = code !== 0 ? "Operação cancelada ou recusada pelo utilizador." : "Sem resultado — o script pode ter falhado silenciosamente.";
-          resolve({ ok: false, error: msg });
+          resolve({ ok: false, error: code !== 0 ? "Operação cancelada pelo utilizador." : "Script falhou silenciosamente." });
           return;
         }
-        const raw = fs.readFileSync(resultPath, "utf-8");
-        resolve(JSON.parse(raw));
+        resolve(JSON.parse(fs.readFileSync(resultPath, "utf-8")));
       } catch (err) {
         resolve({ ok: false, error: `Failed to read result: ${err}` });
       }
