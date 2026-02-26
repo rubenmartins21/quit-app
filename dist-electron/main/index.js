@@ -6,6 +6,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const child_process = require("child_process");
 const os = require("os");
+const http = require("http");
 var _documentCurrentScript = typeof document !== "undefined" ? document.currentScript : null;
 const sessionFile = () => path.join(electron.app.getPath("userData"), "session.json");
 function saveSession(token) {
@@ -137,37 +138,15 @@ const ADULT_DOMAINS = [
   "www.nhentai.net",
   "hentaifox.com",
   "hanime.tv",
-  // RedGifs — principal host de GIFs adultos embebidos no Reddit
+  // RedGifs — quase exclusivamente conteúdo adulto
   "redgifs.com",
   "www.redgifs.com",
   "i.redgifs.com",
   "thumbs.redgifs.com",
   "api.redgifs.com",
-  "v3.redgifs.com",
-  // Imgur adulto
-  "i.imgur.com",
-  // Reddit media CDNs — TODOS os subdomínios conhecidos
-  "i.redd.it",
-  // imagens diretas
-  "v.redd.it",
-  // vídeos
-  "preview.redd.it",
-  // previews/miniaturas — causa principal do problema
-  "external-preview.redd.it",
-  // previews de links externos
-  "i.redditstatic.com",
-  // imagens estáticas do Reddit
-  "redditmedia.com",
-  "i.redditmedia.com",
-  "g.redditmedia.com",
-  "styles.redditmedia.com",
-  "b.thumbs.redditmedia.com",
-  "a.thumbs.redditmedia.com",
-  "thumbs.redditmedia.com",
-  // Twitter/X media CDNs
-  "pbs.twimg.com",
-  "video.twimg.com",
-  "ton.twimg.com"
+  "v3.redgifs.com"
+  // Nota: Reddit e Twitter CDNs NÃO estão aqui — imagens/vídeos normais devem funcionar
+  // O bloqueio de conteúdo adulto no Reddit/Twitter é feito via PAC file por URL path
 ];
 const SAFE_DNS_PRIMARY = "1.1.1.3";
 const SAFE_DNS_SECONDARY = "1.0.0.3";
@@ -175,6 +154,437 @@ const SAFE_DNS_PRIMARY_V6 = "2606:4700:4700::1113";
 const SAFE_DNS_SECONDARY_V6 = "2606:4700:4700::1003";
 const HOSTS_MARKER_START = "# QUIT-BLOCKER-START";
 const HOSTS_MARKER_END = "# QUIT-BLOCKER-END";
+const BLOCKED_URL_PATTERNS = [
+  "*://redgifs.com/*",
+  "*://*.redgifs.com/*"
+];
+const PAC_PORT = 7777;
+let server = null;
+const BLOCKED_SUBREDDITS = [
+  // Lista original
+  "nsfw",
+  "gonewild",
+  "porn",
+  "sex",
+  "hentai",
+  "rule34",
+  "realgirls",
+  "cumsluts",
+  "holdthemoan",
+  "girlsfinishingthejob",
+  "chickflixxx",
+  "dirtyr4r",
+  "onlyfansreview",
+  "sexygirls",
+  "amateur",
+  "nude",
+  "naked",
+  "ass",
+  "boobs",
+  "tits",
+  "gonewildstories",
+  "watchitfortheplot",
+  "sexybutnotporn",
+  "realasians",
+  "latinas",
+  "ebony",
+  "petitegonewild",
+  "18_19",
+  "collegesluts",
+  "nsfw_gif",
+  "nsfw_videos",
+  // Adicionados
+  "pornhub",
+  "redtube",
+  "xvideos",
+  "clipcake",
+  "pornstar",
+  "pornstarvideos",
+  "pornstarx",
+  "pornstarsluts",
+  "pornstarfuck",
+  "pornstarlesbians",
+  "pornstargirls",
+  "pornstarbabes",
+  "pornstarmodels",
+  "pornstaramatures",
+  "pornstarcompilation",
+  "pornstarcompilations",
+  "pornstaronlyfans",
+  "pornstaronly",
+  "pornstaronlyfansleak",
+  "pornstarleaks",
+  "pornstarleak",
+  "pornstarleaksex",
+  "pornstarleakpics",
+  "pornstarhub",
+  "pornhdb",
+  "pornhdb2",
+  "pornhdb3",
+  "pornhdgallery",
+  "pornhdclips",
+  "pornhd",
+  "nudeshots",
+  "nudeworld",
+  "nudelife",
+  "nudeteens",
+  "teensgonewild",
+  "teenporn",
+  "teensex",
+  "teenhotties",
+  "teenbabes",
+  "porncomics",
+  "pornart",
+  "pornartwork",
+  "pornillustration",
+  "pornartists",
+  "pornartlovers",
+  "pornhentai",
+  "pornhentais",
+  "hentaiporn",
+  "rule63",
+  "rule34hentai",
+  "rule34xxx",
+  "pornrule34",
+  "pornhunks",
+  "pornboys",
+  "pornmales",
+  "pornmen",
+  "gayporn",
+  "gaynaked",
+  "gaysex",
+  "gayhentai",
+  "gayxxx",
+  "pornalt",
+  "pornaltart",
+  "pornaltartwork",
+  "pornalters",
+  "pornaltpride",
+  "pornoverflow",
+  "pornhelp",
+  "pornquestions",
+  "pornreview",
+  "pornreviews",
+  "pornrate",
+  "pornleaks",
+  "pornleak",
+  "leakporn",
+  "nudelooking",
+  "nudeleak",
+  "nudeteenleak",
+  "pornhumor",
+  "pornjokes",
+  "pornmemes",
+  "pornmeme",
+  "pornmemeart",
+  "pornmemesdaily",
+  "pornwallpaper",
+  "pornwallpapers",
+  "pornbackground",
+  "pornwallpaperhq",
+  "pornmuse",
+  "pornholic",
+  "pornaddict",
+  "pornjunkie",
+  "pornslut",
+  "pornsluts",
+  "pornslutsofnet",
+  "pornslutsclub",
+  "realboobs",
+  "realnudes",
+  "realnudelooks",
+  "realteenporn",
+  "gonewildteen",
+  "gonewildcollege",
+  "gonewildmilf",
+  "gonewildbbw",
+  "gonewildasian",
+  "gonewildlatina",
+  "gonewildhentai",
+  "gonewildhentais",
+  "18plus",
+  "legalporn",
+  "legalxxx",
+  "bondage",
+  "bdsmporn",
+  "bdsmsex",
+  "bdsmnude",
+  "milfmemes",
+  "milfart",
+  "milfxxx",
+  "milfporn",
+  "milfonlyfans",
+  "bbw",
+  "threesome",
+  "gangbang",
+  "groupsex",
+  "orgy",
+  "pornparty",
+  "fap",
+  "faptime",
+  "fapathon",
+  "fapfap"
+];
+const ADULT_KEYWORDS = [
+  // Lista original
+  "nsfw",
+  "porn",
+  "xxx",
+  "nude",
+  "naked",
+  "gonewild",
+  "hentai",
+  "rule34",
+  "sex",
+  "erotic",
+  "fetish",
+  "onlyfans",
+  "milf",
+  "anal",
+  "boob",
+  "tit",
+  "ass",
+  // Adicionadas
+  "rule63",
+  "creampie",
+  "panties",
+  "lingerie",
+  "pantyhose",
+  "stockings",
+  "fishnet",
+  "latex",
+  "bondage",
+  "bdsm",
+  "cuck",
+  "bbw",
+  "threesome",
+  "gangbang",
+  "groupsex",
+  "orgy",
+  "pornstar",
+  "pornhub",
+  "xvideos",
+  "redtube",
+  "fap",
+  "leak",
+  "nudepic",
+  "nudephoto",
+  "nudity",
+  "booty",
+  "sexting",
+  "gayporn",
+  "gaynaked",
+  "gaysex",
+  "gayhentai",
+  "legalporn",
+  "legalxxx"
+];
+const BLOCKED_TWITTER_PATHS = [
+  // Lista original
+  "/i/timeline",
+  "/search?q=nsfw",
+  "/search?q=porn",
+  "/search?q=nude",
+  "/search?q=sex",
+  "/search?q=%23nsfw",
+  "/search?q=%23porn",
+  // Adicionados
+  "/search?q=boobs",
+  "/search?q=tits",
+  "/search?q=ass",
+  "/search?q=boob",
+  "/search?q=cum",
+  "/search?q=slut",
+  "/search?q=hentai",
+  "/search?q=rule34",
+  "/search?q=gonewild",
+  "/search?q=onlyfans",
+  "/search?q=nudes",
+  "/search?q=nudepic",
+  "/search?q=nudephotos",
+  "/search?q=nudity",
+  "/search?q=xxx",
+  "/search?q=pornstar",
+  "/search?q=sexting",
+  "/search?q=bdsm",
+  "/search?q=creampie",
+  "/search?q=panties",
+  "/search?q=lingerie",
+  "/search?q=stockings",
+  "/search?q=bondage",
+  "/search?q=anal",
+  "/search?q=blowjob",
+  "/search?q=cock",
+  "/search?q=facesitting"
+];
+const TWITTER_SEARCH_KEYWORDS = [
+  // Lista original
+  "nsfw",
+  "porn",
+  "nude",
+  "naked",
+  "sex",
+  "xxx",
+  "onlyfans",
+  "hentai",
+  "rule34",
+  "gonewild",
+  // Adicionadas
+  "nudes",
+  "nudepic",
+  "nudephotos",
+  "nudity",
+  "boob",
+  "boobs",
+  "tits",
+  "tit",
+  "ass",
+  "booty",
+  "panties",
+  "lingerie",
+  "sexting",
+  "milf",
+  "milfs",
+  "bbw",
+  "ebony",
+  "latina",
+  "latinas",
+  "pornstar",
+  "pornstars",
+  "pornstaronlyfans",
+  "pornstarleak",
+  "onlyfansleak",
+  "onlyfansleaks",
+  "gonewildstories",
+  "gonewildteen",
+  "gonewildcollege",
+  "pornhub",
+  "xvideos",
+  "redtube",
+  "pornvideo",
+  "pornvideos",
+  "pornclips",
+  "pornhdb",
+  "pornhd",
+  "gayporn",
+  "gayhentai",
+  "gayxxx",
+  "pornleaks",
+  "pornleak",
+  "pornmemes",
+  "pornart",
+  "rule63",
+  "creampie",
+  "bondage",
+  "bdsm",
+  "anal",
+  "blowjob",
+  "facesitting",
+  "cum",
+  "slut",
+  "cock"
+];
+function buildPacScript() {
+  return `
+function FindProxyForURL(url, host) {
+  var lowerUrl = url.toLowerCase();
+  var lowerHost = host.toLowerCase();
+
+  var blockedSubreddits = ${JSON.stringify(BLOCKED_SUBREDDITS)};
+  var adultKeywords = ${JSON.stringify(ADULT_KEYWORDS)};
+  var blockedTwitterPaths = ${JSON.stringify(BLOCKED_TWITTER_PATHS)};
+  var twitterSearchKeywords = ${JSON.stringify(TWITTER_SEARCH_KEYWORDS)};
+
+  // ── Reddit ────────────────────────────────────────────────────────────────
+  if (lowerHost === "www.reddit.com" || lowerHost === "reddit.com" ||
+      lowerHost === "old.reddit.com" || lowerHost === "oauth.reddit.com") {
+
+    // Bloqueia subreddits conhecidos por nome exato
+    for (var i = 0; i < blockedSubreddits.length; i++) {
+      if (lowerUrl.indexOf("/r/" + blockedSubreddits[i] + "/") !== -1 ||
+          lowerUrl.indexOf("/r/" + blockedSubreddits[i] + "?") !== -1 ||
+          lowerUrl.endsWith("/r/" + blockedSubreddits[i])) {
+        return "PROXY 127.0.0.1:1";
+      }
+    }
+
+    // Bloqueia subreddits cujo nome contenha palavras adultas
+    var match = lowerUrl.match(/\\/r\\/([a-z0-9_]+)/);
+    if (match) {
+      var name = match[1];
+      for (var j = 0; j < adultKeywords.length; j++) {
+        if (name.indexOf(adultKeywords[j]) !== -1) {
+          return "PROXY 127.0.0.1:1";
+        }
+      }
+    }
+  }
+
+  // ── Twitter / X ───────────────────────────────────────────────────────────
+  if (lowerHost === "twitter.com" || lowerHost === "www.twitter.com" ||
+      lowerHost === "x.com" || lowerHost === "www.x.com") {
+
+    // Paths específicos
+    for (var k = 0; k < blockedTwitterPaths.length; k++) {
+      if (lowerUrl.indexOf(blockedTwitterPaths[k].toLowerCase()) !== -1) {
+        return "PROXY 127.0.0.1:1";
+      }
+    }
+
+    // Pesquisas com keywords adultas
+    for (var l = 0; l < twitterSearchKeywords.length; l++) {
+      if (lowerUrl.indexOf("search?q=" + twitterSearchKeywords[l]) !== -1 ||
+          lowerUrl.indexOf("search?q=%23" + twitterSearchKeywords[l]) !== -1) {
+        return "PROXY 127.0.0.1:1";
+      }
+    }
+  }
+
+  return "DIRECT";
+}
+`.trim();
+}
+function startPacServer() {
+  return new Promise((resolve, reject) => {
+    if (server) {
+      resolve();
+      return;
+    }
+    const script = buildPacScript();
+    server = http.createServer((req, res) => {
+      if (req.url === "/proxy.pac" || req.url === "/") {
+        res.writeHead(200, {
+          "Content-Type": "application/x-ns-proxy-autoconfig",
+          "Cache-Control": "no-cache"
+        });
+        res.end(script);
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    server.listen(PAC_PORT, "127.0.0.1", () => {
+      console.log(`✅ PAC server: http://127.0.0.1:${PAC_PORT}/proxy.pac`);
+      resolve();
+    });
+    server.on("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        console.warn("PAC server port already in use — assuming already running");
+        resolve();
+      } else {
+        reject(err);
+      }
+    });
+  });
+}
+function stopPacServer() {
+  if (server) {
+    server.close();
+    server = null;
+    console.log("PAC server stopped");
+  }
+}
+const PAC_URL = `http://127.0.0.1:${PAC_PORT}/proxy.pac`;
 function getScriptPath() {
   return path.join(electron.app.getPath("userData"), "quit-blocker-helper.ps1");
 }
@@ -184,9 +594,10 @@ function getResultPath() {
 function buildScript() {
   const hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts";
   const domainLines = ADULT_DOMAINS.map((d) => `0.0.0.0 ${d}`).join("\r\n");
+  const pacUrl = PAC_URL;
   return `param([string]$Action, [string]$ResultPath)
 
-$result = @{ ok = $true; hostsActive = $false; dnsActive = $false; error = "" }
+$result = @{ ok = $true; hostsActive = $false; dnsActive = $false; pacActive = $false; error = "" }
 $hostsPath = "${hostsPath.replace(/\\/g, "\\\\")}"
 $markerStart = "${HOSTS_MARKER_START}"
 $markerEnd = "${HOSTS_MARKER_END}"
@@ -194,8 +605,25 @@ $primaryDNS = "${SAFE_DNS_PRIMARY}"
 $secondaryDNS = "${SAFE_DNS_SECONDARY}"
 $primaryDNSv6 = "${SAFE_DNS_PRIMARY_V6}"
 $secondaryDNSv6 = "${SAFE_DNS_SECONDARY_V6}"
+$pacUrl = "${pacUrl}"
+$regPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
 
 function Flush-DNS { try { ipconfig /flushdns | Out-Null } catch {} }
+
+function Notify-ProxyChange {
+  try {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class WinInetHelper {
+  [DllImport("wininet.dll", SetLastError=true)]
+  public static extern bool InternetSetOption(IntPtr h, int opt, IntPtr buf, int len);
+}
+"@ -ErrorAction SilentlyContinue
+    [WinInetHelper]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+    [WinInetHelper]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+  } catch {}
+}
 
 function Get-ActiveAdapters {
   try { return (Get-NetAdapter | Where-Object { $_.Status -eq "Up" }).Name }
@@ -212,7 +640,7 @@ function Remove-QuitEntries([string]$content) {
 }
 
 function Activate-Block {
-  # Hosts file — usar ASCII para garantir compatibilidade com Windows
+  # 1. Hosts file (ASCII encoding para compatibilidade Windows)
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
   $content = Remove-QuitEntries $content
@@ -220,39 +648,49 @@ function Activate-Block {
   $content = $content.TrimEnd() + $block
   [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
 
-  # DNS IPv4
+  # 2. DNS IPv4
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
     try { netsh interface ip set dns "$a" static $primaryDNS primary validate=no | Out-Null } catch {}
     try { netsh interface ip add dns "$a" $secondaryDNS index=2 validate=no | Out-Null } catch {}
   }
 
-  # DNS IPv6
+  # 3. DNS IPv6
   foreach ($a in $adapters) {
     try { netsh interface ipv6 set dns "$a" static $primaryDNSv6 primary validate=no | Out-Null } catch {}
     try { netsh interface ipv6 add dns "$a" $secondaryDNSv6 index=2 validate=no | Out-Null } catch {}
   }
 
+  # 4. PAC file via registo do Windows (Chrome, Edge, IE)
+  Set-ItemProperty -Path $regPath -Name "AutoConfigURL" -Value $pacUrl
+  Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0
+  Notify-ProxyChange
+
   Flush-DNS
 }
 
 function Deactivate-Block {
-  # Hosts file
+  # 1. Hosts file
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
   $content = Remove-QuitEntries $content
   [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
 
-  # DNS IPv4 restore to DHCP
+  # 2. DNS IPv4 → DHCP
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
     try { netsh interface ip set dns "$a" dhcp | Out-Null } catch {}
   }
 
-  # DNS IPv6 restore to DHCP
+  # 3. DNS IPv6 → DHCP
   foreach ($a in $adapters) {
     try { netsh interface ipv6 set dns "$a" dhcp | Out-Null } catch {}
   }
+
+  # 4. Remove PAC
+  try { Remove-ItemProperty -Path $regPath -Name "AutoConfigURL" -ErrorAction SilentlyContinue } catch {}
+  Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0
+  Notify-ProxyChange
 
   Flush-DNS
 }
@@ -261,8 +699,16 @@ function Get-Status {
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
   $result["hostsActive"] = $content.Contains($markerStart)
+
   $dnsOut = netsh interface ip show dns 2>$null | Out-String
   $result["dnsActive"] = $dnsOut.Contains($primaryDNS)
+
+  try {
+    $pacVal = Get-ItemProperty -Path $regPath -Name "AutoConfigURL" -ErrorAction SilentlyContinue
+    $result["pacActive"] = ($null -ne $pacVal -and $pacVal.AutoConfigURL -eq $pacUrl)
+  } catch {
+    $result["pacActive"] = $false
+  }
 }
 
 try {
@@ -303,7 +749,10 @@ async function runElevated(action) {
     ps.on("close", (code) => {
       try {
         if (!fs.existsSync(resultPath)) {
-          resolve({ ok: false, error: code !== 0 ? "Operação cancelada pelo utilizador." : "Script falhou silenciosamente." });
+          resolve({
+            ok: false,
+            error: code !== 0 ? "Operação cancelada pelo utilizador." : "Script falhou silenciosamente."
+          });
           return;
         }
         resolve(JSON.parse(fs.readFileSync(resultPath, "utf-8")));
@@ -314,13 +763,32 @@ async function runElevated(action) {
     ps.on("error", (err) => resolve({ ok: false, error: err.message }));
   });
 }
+let interceptorActive = false;
+function activateRequestInterceptor() {
+  if (interceptorActive) return;
+  const ses = electron.session.defaultSession;
+  ses.webRequest.onBeforeRequest(
+    { urls: BLOCKED_URL_PATTERNS },
+    (details, callback) => {
+      console.log(`🚫 Blocked request: ${details.url}`);
+      callback({ cancel: true });
+    }
+  );
+  interceptorActive = true;
+  console.log("✅ Request interceptor active");
+}
+function deactivateRequestInterceptor() {
+  if (!interceptorActive) return;
+  electron.session.defaultSession.webRequest.onBeforeRequest(null);
+  interceptorActive = false;
+  console.log("✅ Request interceptor deactivated");
+}
 function getStatePath() {
   return path.join(electron.app.getPath("userData"), "blocker-state.json");
 }
 function loadBlockerState() {
   try {
-    const raw = fs.readFileSync(getStatePath(), "utf-8");
-    return JSON.parse(raw);
+    return JSON.parse(fs.readFileSync(getStatePath(), "utf-8"));
   } catch {
     return { active: false, activatedAt: null, challengeId: null };
   }
@@ -330,38 +798,52 @@ function saveBlockerState(state) {
 }
 async function activateBlocker(challengeId) {
   console.log("🔒 Activating blocker for challenge:", challengeId);
+  await startPacServer();
+  activateRequestInterceptor();
   const result = await runElevated("activate");
+  saveBlockerState({
+    active: true,
+    activatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    challengeId
+  });
   if (result.ok) {
-    saveBlockerState({
-      active: true,
-      activatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      challengeId
-    });
-    console.log("✅ Blocker activated");
+    console.log("✅ Blocker fully activated (PAC + interceptor + hosts + DNS)");
   } else {
-    console.error("❌ Blocker activation failed:", result.error);
+    console.warn("⚠️  System-level failed, PAC + interceptor still active:", result.error);
   }
-  return result;
+  return { ok: true };
 }
 async function deactivateBlocker() {
   console.log("🔓 Deactivating blocker...");
+  deactivateRequestInterceptor();
   const result = await runElevated("deactivate");
+  stopPacServer();
+  saveBlockerState({ active: false, activatedAt: null, challengeId: null });
   if (result.ok) {
-    saveBlockerState({ active: false, activatedAt: null, challengeId: null });
-    console.log("✅ Blocker deactivated");
+    console.log("✅ Blocker fully deactivated");
   } else {
-    console.error("❌ Blocker deactivation failed:", result.error);
+    console.warn("⚠️  System-level deactivation failed:", result.error);
   }
   return result;
 }
+async function loadAndRestoreInterceptor() {
+  const state = loadBlockerState();
+  if (!state.active) return;
+  await startPacServer();
+  activateRequestInterceptor();
+  console.log("🔒 PAC server + interceptor restored from previous session");
+}
 async function getBlockerStatus() {
   const state = loadBlockerState();
-  if (!state.active) return { active: false, hostsActive: false, dnsActive: false };
+  if (!state.active) {
+    return { active: false, hostsActive: false, dnsActive: false, pacActive: false };
+  }
   const result = await runElevated("status");
   return {
     active: state.active,
     hostsActive: result.hostsActive ?? false,
-    dnsActive: result.dnsActive ?? false
+    dnsActive: result.dnsActive ?? false,
+    pacActive: result.pacActive ?? false
   };
 }
 var util;
@@ -4035,6 +4517,31 @@ electron.ipcMain.handle("blocker:full-status", async () => {
 });
 const __dirname$1 = path.dirname(url.fileURLToPath(typeof document === "undefined" ? require("url").pathToFileURL(__filename).href : _documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === "SCRIPT" && _documentCurrentScript.src || new URL("index.js", document.baseURI).href));
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+const BLOCKER_SYNC_INTERVAL_MS = 5 * 60 * 1e3;
+async function syncBlockerInBackground() {
+  var _a;
+  const state = loadBlockerState();
+  if (!state.active) return;
+  const session = loadSession();
+  if (!session) {
+    console.log("⏰ Sync: no session — keeping blocker active");
+    return;
+  }
+  try {
+    const res = await getActiveChallenge();
+    if (res.error) {
+      console.warn("⏰ Sync: backend unreachable, keeping blocker active");
+      return;
+    }
+    const challenge = ((_a = res.data) == null ? void 0 : _a.challenge) ?? null;
+    if (challenge === null || challenge.status !== "active") {
+      console.log("⏰ Sync: no active challenge — deactivating blocker");
+      await deactivateBlocker();
+    }
+  } catch (err) {
+    console.warn("⏰ Sync failed:", err);
+  }
+}
 function createWindow() {
   const win = new electron.BrowserWindow({
     width: 960,
@@ -4064,15 +4571,16 @@ function createWindow() {
     win.loadFile(path.join(__dirname$1, "../../dist/index.html"));
   }
 }
-electron.app.on("ready", () => {
+electron.app.on("ready", async () => {
   getOrCreateDeviceId();
   const token = loadSession();
   if (token) {
     setToken(token);
     console.log("✅ Session restored");
   }
-  const blockerState = loadBlockerState();
-  if (blockerState.active) console.log("🔒 Blocker was active on last session");
+  await loadAndRestoreInterceptor();
+  await syncBlockerInBackground();
+  setInterval(syncBlockerInBackground, BLOCKER_SYNC_INTERVAL_MS);
   createWindow();
 });
 electron.app.on("window-all-closed", () => {

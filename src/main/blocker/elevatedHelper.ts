@@ -12,12 +12,14 @@ import {
   HOSTS_MARKER_START,
   HOSTS_MARKER_END,
 } from "./blocklist.js";
+import { PAC_URL } from "./pacServer.js";
 
 export type BlockerAction = "activate" | "deactivate" | "status";
 export interface HelperResult {
   ok: boolean;
   hostsActive?: boolean;
   dnsActive?: boolean;
+  pacActive?: boolean;
   error?: string;
 }
 
@@ -31,10 +33,11 @@ function getResultPath(): string {
 function buildScript(): string {
   const hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts";
   const domainLines = ADULT_DOMAINS.map(d => `0.0.0.0 ${d}`).join("\r\n");
+  const pacUrl = PAC_URL;
 
   return `param([string]$Action, [string]$ResultPath)
 
-$result = @{ ok = $true; hostsActive = $false; dnsActive = $false; error = "" }
+$result = @{ ok = $true; hostsActive = $false; dnsActive = $false; pacActive = $false; error = "" }
 $hostsPath = "${hostsPath.replace(/\\/g, "\\\\")}"
 $markerStart = "${HOSTS_MARKER_START}"
 $markerEnd = "${HOSTS_MARKER_END}"
@@ -42,8 +45,25 @@ $primaryDNS = "${SAFE_DNS_PRIMARY}"
 $secondaryDNS = "${SAFE_DNS_SECONDARY}"
 $primaryDNSv6 = "${SAFE_DNS_PRIMARY_V6}"
 $secondaryDNSv6 = "${SAFE_DNS_SECONDARY_V6}"
+$pacUrl = "${pacUrl}"
+$regPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
 
 function Flush-DNS { try { ipconfig /flushdns | Out-Null } catch {} }
+
+function Notify-ProxyChange {
+  try {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class WinInetHelper {
+  [DllImport("wininet.dll", SetLastError=true)]
+  public static extern bool InternetSetOption(IntPtr h, int opt, IntPtr buf, int len);
+}
+"@ -ErrorAction SilentlyContinue
+    [WinInetHelper]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+    [WinInetHelper]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+  } catch {}
+}
 
 function Get-ActiveAdapters {
   try { return (Get-NetAdapter | Where-Object { $_.Status -eq "Up" }).Name }
@@ -60,7 +80,7 @@ function Remove-QuitEntries([string]$content) {
 }
 
 function Activate-Block {
-  # Hosts file — usar ASCII para garantir compatibilidade com Windows
+  # 1. Hosts file (ASCII encoding para compatibilidade Windows)
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
   $content = Remove-QuitEntries $content
@@ -68,39 +88,49 @@ function Activate-Block {
   $content = $content.TrimEnd() + $block
   [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
 
-  # DNS IPv4
+  # 2. DNS IPv4
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
     try { netsh interface ip set dns "$a" static $primaryDNS primary validate=no | Out-Null } catch {}
     try { netsh interface ip add dns "$a" $secondaryDNS index=2 validate=no | Out-Null } catch {}
   }
 
-  # DNS IPv6
+  # 3. DNS IPv6
   foreach ($a in $adapters) {
     try { netsh interface ipv6 set dns "$a" static $primaryDNSv6 primary validate=no | Out-Null } catch {}
     try { netsh interface ipv6 add dns "$a" $secondaryDNSv6 index=2 validate=no | Out-Null } catch {}
   }
 
+  # 4. PAC file via registo do Windows (Chrome, Edge, IE)
+  Set-ItemProperty -Path $regPath -Name "AutoConfigURL" -Value $pacUrl
+  Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0
+  Notify-ProxyChange
+
   Flush-DNS
 }
 
 function Deactivate-Block {
-  # Hosts file
+  # 1. Hosts file
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
   $content = Remove-QuitEntries $content
   [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
 
-  # DNS IPv4 restore to DHCP
+  # 2. DNS IPv4 → DHCP
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
     try { netsh interface ip set dns "$a" dhcp | Out-Null } catch {}
   }
 
-  # DNS IPv6 restore to DHCP
+  # 3. DNS IPv6 → DHCP
   foreach ($a in $adapters) {
     try { netsh interface ipv6 set dns "$a" dhcp | Out-Null } catch {}
   }
+
+  # 4. Remove PAC
+  try { Remove-ItemProperty -Path $regPath -Name "AutoConfigURL" -ErrorAction SilentlyContinue } catch {}
+  Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0
+  Notify-ProxyChange
 
   Flush-DNS
 }
@@ -109,8 +139,16 @@ function Get-Status {
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
   $result["hostsActive"] = $content.Contains($markerStart)
+
   $dnsOut = netsh interface ip show dns 2>$null | Out-String
   $result["dnsActive"] = $dnsOut.Contains($primaryDNS)
+
+  try {
+    $pacVal = Get-ItemProperty -Path $regPath -Name "AutoConfigURL" -ErrorAction SilentlyContinue
+    $result["pacActive"] = ($null -ne $pacVal -and $pacVal.AutoConfigURL -eq $pacUrl)
+  } catch {
+    $result["pacActive"] = $false
+  }
 }
 
 try {
@@ -152,7 +190,12 @@ export async function runElevated(action: BlockerAction): Promise<HelperResult> 
     ps.on("close", (code) => {
       try {
         if (!fs.existsSync(resultPath)) {
-          resolve({ ok: false, error: code !== 0 ? "Operação cancelada pelo utilizador." : "Script falhou silenciosamente." });
+          resolve({
+            ok: false,
+            error: code !== 0
+              ? "Operação cancelada pelo utilizador."
+              : "Script falhou silenciosamente.",
+          });
           return;
         }
         resolve(JSON.parse(fs.readFileSync(resultPath, "utf-8")) as HelperResult);

@@ -18,9 +18,9 @@ async function syncBlockerInBackground(): Promise<void> {
   const state = loadBlockerState();
   if (!state.active) return;
 
-  // Sem sessão → não conseguimos verificar o backend → mantém bloqueio
   const session = loadSession();
   if (!session) {
+    // Sem sessão — não conseguimos verificar o backend → mantém bloqueio
     console.log("⏰ Sync: no session — keeping blocker active");
     return;
   }
@@ -28,8 +28,8 @@ async function syncBlockerInBackground(): Promise<void> {
   try {
     const res = await getActiveChallenge();
 
-    // Erro de rede — mantém bloqueio ativo por segurança
     if (res.error) {
+      // Erro de rede — mantém bloqueio por segurança
       console.warn("⏰ Sync: backend unreachable, keeping blocker active");
       return;
     }
@@ -83,9 +83,10 @@ app.on("ready", async () => {
     console.log("✅ Session restored");
   }
 
-  loadAndRestoreInterceptor();
+  // Restaura PAC server + interceptor se bloqueio estava ativo
+  await loadAndRestoreInterceptor();
 
-  // Sync imediato — desativa bloqueio órfão logo ao arrancar
+  // Sync imediato ao arrancar — remove bloqueio órfão se desafio já terminou
   await syncBlockerInBackground();
 
   // Sync periódico a cada 5 minutos
