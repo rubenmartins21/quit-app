@@ -8,7 +8,6 @@ import path from "path";
 import { execSync } from "child_process";
 import {
   ADULT_DOMAINS,
-  SAFESEARCH_ENTRIES,
   HOSTS_MARKER_START,
   HOSTS_MARKER_END,
 } from "./blocklist.js";
@@ -31,11 +30,6 @@ function buildBlockEntries(): string {
   // Block adult domains
   for (const domain of ADULT_DOMAINS) {
     lines.push(`0.0.0.0 ${domain}`);
-  }
-
-  // SafeSearch enforcement (CNAME-style via hosts)
-  for (const entry of SAFESEARCH_ENTRIES) {
-    lines.push(`# SafeSearch: ${entry.domain} -> ${entry.ip}`);
   }
 
   lines.push(HOSTS_MARKER_END);

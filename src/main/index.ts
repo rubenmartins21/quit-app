@@ -4,11 +4,24 @@ import { fileURLToPath } from "url";
 import { loadSession } from "./services/session.js";
 import { setToken, getActiveChallenge } from "./services/apiClient.js";
 import { getOrCreateDeviceId } from "./services/device.js";
-import { loadBlockerState, loadAndRestoreInterceptor, deactivateBlocker } from "./blocker/blockerService.js";
+import {
+  loadBlockerState,
+  loadAndRestoreInterceptor,
+  deactivateBlocker,
+} from "./blocker/blockerService.js";
 
 import "./ipc/auth.ipc.js";
 import "./ipc/challenge.ipc.js";
 import "./ipc/blocker.ipc.js";
+
+import fs from "fs";
+const logFile = path.join(app.getPath("userData"), "blocker-debug.log");
+const logStream = fs.createWriteStream(logFile, { flags: "a" });
+const origLog = console.log.bind(console);
+console.log = (...args) => {
+  origLog(...args);
+  logStream.write(args.join(" ") + "\n");
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
@@ -47,7 +60,10 @@ async function syncBlockerInBackground(): Promise<void> {
 
 function createWindow(): void {
   const win = new BrowserWindow({
-    width: 960, height: 660, minWidth: 720, minHeight: 500,
+    width: 960,
+    height: 660,
+    minWidth: 720,
+    minHeight: 500,
     titleBarStyle: "hiddenInset",
     backgroundColor: "#f9f9f8",
     webPreferences: {

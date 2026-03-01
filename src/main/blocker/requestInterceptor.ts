@@ -1,10 +1,12 @@
 /**
  * requestInterceptor — Electron-level URL blocking.
- * Uses session.webRequest.onBeforeRequest to intercept and cancel requests
- * before they leave the app. Works for all Electron-rendered content.
  *
- * Note: This only blocks requests made WITHIN the Electron app (webviews etc).
- * For system-wide blocking (Chrome, Firefox etc), hosts file + DNS is used.
+ * Bloqueia domínios adultos conhecidos dentro do Electron (BrowserWindow/webview).
+ * Não cobre Reddit/Twitter por path — esses abrem no Chrome externo onde só o
+ * PAC file tem jurisdição.
+ *
+ * Nota: só bloqueia dentro do Electron.
+ * Para Chrome/Firefox, o bloqueio é feito por hosts + DNS + PAC.
  */
 
 import { session } from "electron";
@@ -32,7 +34,6 @@ export function activateRequestInterceptor(): void {
 export function deactivateRequestInterceptor(): void {
   if (!interceptorActive) return;
 
-  // Remove the listener by passing null
   session.defaultSession.webRequest.onBeforeRequest(null as any);
   interceptorActive = false;
   console.log("✅ Request interceptor deactivated");

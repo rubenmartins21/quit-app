@@ -314,73 +314,126 @@ function FindProxyForURL(url, host) {
   var pornstarNames = ${JSON.stringify(PORNSTAR_NAMES)};
   var adultChannels = ${JSON.stringify(ADULT_CHANNELS)};
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  // Extrai path e query de forma robusta, sem depender do host
+  // Funciona com http, https, variações www/old/mobile, redirects, etc.
+  var pathOnly = lowerUrl.replace(/^https?:\/\/[^/]+/, "");
+  var qMark = pathOnly.indexOf("?");
+  var path  = qMark !== -1 ? pathOnly.substring(0, qMark) : pathOnly;
+  var query = qMark !== -1 ? pathOnly.substring(qMark + 1) : "";
+
+  // Tenta decodificar query string (pode estar URL-encoded)
+  var decodedQuery = query;
+  try { decodedQuery = decodeURIComponent(query.replace(/\+/g, " ")); } catch(e) {}
+
+  // Hosts alvo — Reddit
+  var isReddit = (lowerHost === "reddit.com" ||
+                  lowerHost === "www.reddit.com" ||
+                  lowerHost === "old.reddit.com" ||
+                  lowerHost === "oauth.reddit.com" ||
+                  lowerHost === "sh.reddit.com");
+
+  // Hosts alvo — Twitter/X
+  var isTwitter = (lowerHost === "twitter.com" ||
+                   lowerHost === "www.twitter.com" ||
+                   lowerHost === "x.com" ||
+                   lowerHost === "www.x.com");
+
   // ── Reddit ────────────────────────────────────────────────────────────────
-  if (lowerHost === "www.reddit.com" || lowerHost === "reddit.com" ||
-      lowerHost === "old.reddit.com" || lowerHost === "oauth.reddit.com") {
+  if (isReddit) {
 
-    // Bloqueia subreddits conhecidos por nome exato
-    for (var i = 0; i < blockedSubreddits.length; i++) {
-      if (lowerUrl.indexOf("/r/" + blockedSubreddits[i] + "/") !== -1 ||
-          lowerUrl.indexOf("/r/" + blockedSubreddits[i] + "?") !== -1 ||
-          lowerUrl.endsWith("/r/" + blockedSubreddits[i])) {
-        return "PROXY 127.0.0.1:1";
+    // A) Subreddit — extrai nome do path de forma robusta
+    //    Captura /r/NOME seguido de / ou fim de path
+    var subM = path.match(/\/r\/([a-z0-9_]{1,50})(\/|$)/);
+    if (subM) {
+      var subName = subM[1];
+
+      // A1. Lista exata
+      for (var i = 0; i < blockedSubreddits.length; i++) {
+        if (subName === blockedSubreddits[i]) return "PROXY 127.0.0.1:1";
       }
-    }
 
-    // Bloqueia subreddits cujo nome contenha palavras adultas
-    var match = lowerUrl.match(/\/r\/([a-z0-9_]+)/);
-    if (match) {
-      var name = match[1];
+      // A2. Nome contém keyword adulta
+      //     ex: "pawgbehavior" → contém "pawg"
+      //         "bigassporn"   → contém "ass", "porn"
       for (var j = 0; j < adultKeywords.length; j++) {
-        if (name.indexOf(adultKeywords[j]) !== -1) {
-          return "PROXY 127.0.0.1:1";
-        }
+        if (subName.indexOf(adultKeywords[j]) !== -1) return "PROXY 127.0.0.1:1";
       }
     }
 
-    // Bloqueia posts cujo título (slug) contenha palavras adultas ou nomes de pornstars
-    var postMatch = lowerUrl.match(/\/comments\/[a-z0-9]+\/([^/?]+)/);
-    if (postMatch) {
-      var postSlug = postMatch[1].replace(/_/g, " ");
+    // B) Slug do post — /comments/ID/SLUG
+    //    Normaliza underscores, hífens e caracteres não-alfanuméricos para espaço
+    //    ex: "big_asses_get_fucked" → "big asses get fucked"
+    var postM = path.match(/\/comments\/[a-z0-9]+\/([^/]+)/);
+    if (postM) {
+      var slug = postM[1]
+        .replace(/[_\-]+/g, " ")
+        .replace(/[^a-z0-9 ]/g, " ")
+        .replace(/\s+/g, " ")
+        .replace(/^\s|\s$/g, "");
+
       for (var p = 0; p < adultKeywords.length; p++) {
-        if (postSlug.indexOf(adultKeywords[p]) !== -1) {
-          return "PROXY 127.0.0.1:1";
-        }
+        if (slug.indexOf(adultKeywords[p]) !== -1) return "PROXY 127.0.0.1:1";
       }
-      // Verifica nomes de pornstars no título do post
       for (var ps = 0; ps < pornstarNames.length; ps++) {
-        if (postSlug.indexOf(pornstarNames[ps]) !== -1) {
-          return "PROXY 127.0.0.1:1";
-        }
+        if (slug.indexOf(pornstarNames[ps]) !== -1) return "PROXY 127.0.0.1:1";
       }
-      // Verifica nomes de canais/studios no título do post
       for (var ch = 0; ch < adultChannels.length; ch++) {
-        if (postSlug.indexOf(adultChannels[ch]) !== -1) {
-          return "PROXY 127.0.0.1:1";
-        }
+        if (slug.indexOf(adultChannels[ch]) !== -1) return "PROXY 127.0.0.1:1";
       }
+    }
+
+    // C) Query string de pesquisa — /search?q=porn
+    //    Verifica tanto a raw como a decodificada
+    if (decodedQuery.length > 0) {
+      for (var q = 0; q < adultKeywords.length; q++) {
+        if (decodedQuery.indexOf(adultKeywords[q]) !== -1) return "PROXY 127.0.0.1:1";
+      }
+    }
+
+    // D) Fallback — keyword adulta em qualquer parte da URL do Reddit
+    //    Garante bloqueio mesmo que o parsing A/B/C falhe
+    //    Aplica-se APENAS a hosts Reddit para evitar falsos positivos globais
+    for (var f = 0; f < adultKeywords.length; f++) {
+      if (lowerUrl.indexOf(adultKeywords[f]) !== -1) return "PROXY 127.0.0.1:1";
     }
   }
 
   // ── Twitter / X ───────────────────────────────────────────────────────────
-  if (lowerHost === "twitter.com" || lowerHost === "www.twitter.com" ||
-      lowerHost === "x.com" || lowerHost === "www.x.com") {
+  if (isTwitter) {
 
-    // Paths específicos
+    // A) Paths específicos (/i/timeline, etc.)
     for (var k = 0; k < blockedTwitterPaths.length; k++) {
-      if (lowerUrl.indexOf(blockedTwitterPaths[k].toLowerCase()) !== -1) {
+      if (path.indexOf(blockedTwitterPaths[k].toLowerCase()) !== -1) {
         return "PROXY 127.0.0.1:1";
       }
     }
 
-    // Pesquisas com keywords adultas, nomes de pornstars e canais
-    for (var l = 0; l < twitterSearchKeywords.length; l++) {
-      var kw = twitterSearchKeywords[l].replace(/ /g, "%20");
-      if (lowerUrl.indexOf("search?q=" + kw) !== -1 ||
-          lowerUrl.indexOf("search?q=" + twitterSearchKeywords[l]) !== -1 ||
-          lowerUrl.indexOf("search?q=%23" + twitterSearchKeywords[l]) !== -1) {
-        return "PROXY 127.0.0.1:1";
+    // B) Parâmetro ?q= — extrai e decodifica valor
+    //    Suporta: ?q=porn, ?q=porn+hub, ?q=%23nsfw, ?q=riley%20reid
+    var qParam = "";
+    var qRaw = "";
+    var qIdx = query.indexOf("q=");
+    if (qIdx !== -1) {
+      qRaw = query.substring(qIdx + 2).split("&")[0];
+      try { qParam = decodeURIComponent(qRaw.replace(/\+/g, " ")); } catch(e) { qParam = qRaw; }
+    }
+
+    if (qParam.length > 0) {
+      // Verifica keywords adultas gerais
+      for (var l = 0; l < adultKeywords.length; l++) {
+        if (qParam.indexOf(adultKeywords[l]) !== -1) return "PROXY 127.0.0.1:1";
       }
+      // Verifica keywords Twitter específicas (nomes de pornstars, canais, etc.)
+      for (var ts = 0; ts < twitterSearchKeywords.length; ts++) {
+        if (qParam.indexOf(twitterSearchKeywords[ts]) !== -1) return "PROXY 127.0.0.1:1";
+      }
+    }
+
+    // C) Fallback — keyword adulta na URL completa do Twitter
+    for (var tf = 0; tf < adultKeywords.length; tf++) {
+      if (lowerUrl.indexOf(adultKeywords[tf]) !== -1) return "PROXY 127.0.0.1:1";
     }
   }
 
