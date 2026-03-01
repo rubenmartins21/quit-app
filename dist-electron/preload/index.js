@@ -8,7 +8,7 @@ electron.contextBridge.exposeInMainWorld("quit", {
     logout: () => electron.ipcRenderer.invoke("auth:logout")
   },
   challenge: {
-    create: (durationDays, reason) => electron.ipcRenderer.invoke("challenge:create", { durationDays, reason }),
+    create: (payload) => electron.ipcRenderer.invoke("challenge:create", payload),
     active: () => electron.ipcRenderer.invoke("challenge:active"),
     cancel: (id) => electron.ipcRenderer.invoke("challenge:cancel", id),
     quitRequest: {
@@ -18,7 +18,9 @@ electron.contextBridge.exposeInMainWorld("quit", {
     history: () => electron.ipcRenderer.invoke("challenge:history")
   },
   blocker: {
-    status: () => electron.ipcRenderer.invoke("blocker:status")
+    status: () => electron.ipcRenderer.invoke("blocker:status"),
+    installedApps: () => electron.ipcRenderer.invoke("blocker:installed-apps"),
+    add: (payload) => electron.ipcRenderer.invoke("blocker:add", payload)
   }
 });
 //# sourceMappingURL=index.js.map

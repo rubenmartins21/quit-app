@@ -1,16 +1,52 @@
 import { ipcMain } from "electron";
 import { z } from "zod";
 import * as api from "../services/apiClient.js";
-import { activateBlocker, deactivateBlocker } from "../blocker/blockerService.js";
+import { activateBlocker, deactivateBlocker, loadBlockerState } from "../blocker/blockerService.js";
+import type { CustomBlocklist, BlockedApp } from "../blocker/customBlocklist.js";
+
+const BlockedAppSchema = z.object({
+  name: z.string(),
+  exePath: z.string(),
+});
 
 const CreateSchema = z.object({
   durationDays: z.number().int().min(7),
   reason: z.string().min(10).max(500).trim(),
+  // Preferências de bloqueio custom (opcionais)
+  blockReddit: z.boolean().optional().default(false),
+  blockTwitter: z.boolean().optional().default(false),
+  blockedApps: z.array(BlockedAppSchema).optional().default([]),
+  blockedUrls: z.array(z.string().max(200)).optional().default([]),
 });
 const QuitRequestSchema = z.object({
   id: z.string(),
   feeling: z.string().min(5).max(1000).trim(),
 });
+
+/**
+ * Verifica se o bloqueio deve ser desativado com base no estado do desafio.
+ * Chamado sempre que buscamos o desafio ativo.
+ * Se não há desafio ativo (null) e o bloqueio está ativo → desativa.
+ */
+async function syncBlockerWithChallengeState(challenge: api.ChallengeData | null): Promise<void> {
+  const blockerState = loadBlockerState();
+
+  if (!blockerState.active) return; // bloqueio já inativo, nada a fazer
+
+  if (challenge === null) {
+    // Sem desafio ativo (completado, cancelado, ou nunca existiu)
+    // → desativar bloqueio
+    console.log("🔓 No active challenge detected — deactivating blocker automatically");
+    await deactivateBlocker();
+    return;
+  }
+
+  if (challenge.status !== "active") {
+    // Desafio existe mas não está ativo (cancelled, completed)
+    console.log(`🔓 Challenge status is '${challenge.status}' — deactivating blocker`);
+    await deactivateBlocker();
+  }
+}
 
 // Create challenge + activate blocker
 ipcMain.handle("challenge:create", async (_e, payload: unknown) => {
@@ -20,20 +56,32 @@ ipcMain.handle("challenge:create", async (_e, payload: unknown) => {
   const res = await api.createChallenge(parsed.data.durationDays, parsed.data.reason);
   if (res.error || !res.data) return { error: res.error ?? "Erro ao criar desafio" };
 
-  // Activate blocker after challenge is created
+  const customBl: CustomBlocklist = {
+    blockReddit: parsed.data.blockReddit ?? false,
+    blockTwitter: parsed.data.blockTwitter ?? false,
+    blockedApps: (parsed.data.blockedApps ?? []) as BlockedApp[],
+    blockedUrls: parsed.data.blockedUrls ?? [],
+    addedAt: new Date().toISOString(),
+  };
+
   console.log("🔒 Challenge created, activating blocker...");
-  const blockerResult = await activateBlocker(res.data.id);
-  if (!blockerResult.ok) {
-    console.warn("⚠️  Blocker activation failed:", blockerResult.error);
-    // Don't fail the challenge creation — blocker failure is non-blocking
-  }
+  const blockerResult = await activateBlocker(res.data.id, customBl);
+  if (!blockerResult.ok) console.warn("⚠️  Blocker activation failed:", blockerResult.error);
 
   return { ok: true, challenge: res.data, blockerActive: blockerResult.ok };
 });
 
+// Get active challenge + sync blocker state
 ipcMain.handle("challenge:active", async () => {
   const res = await api.getActiveChallenge();
-  return res.error ? { error: res.error } : { ok: true, challenge: res.data?.challenge ?? null };
+  if (res.error) return { error: res.error };
+
+  const challenge = res.data?.challenge ?? null;
+
+  // Always sync blocker state with reality
+  await syncBlockerWithChallengeState(challenge);
+
+  return { ok: true, challenge };
 });
 
 // Cancel challenge + deactivate blocker
@@ -43,12 +91,8 @@ ipcMain.handle("challenge:cancel", async (_e, id: unknown) => {
   const res = await api.cancelChallenge(id);
   if (res.error || !res.data) return { error: res.error ?? "Erro ao cancelar" };
 
-  // Deactivate blocker
   console.log("🔓 Challenge cancelled, deactivating blocker...");
-  const blockerResult = await deactivateBlocker();
-  if (!blockerResult.ok) {
-    console.warn("⚠️  Blocker deactivation failed:", blockerResult.error);
-  }
+  await deactivateBlocker();
 
   return { ok: true, challenge: res.data };
 });

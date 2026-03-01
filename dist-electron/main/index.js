@@ -160,7 +160,7 @@ const BLOCKED_URL_PATTERNS = [
 ];
 const PAC_PORT = 7777;
 let server = null;
-const BLOCKED_SUBREDDITS$1 = [
+const BLOCKED_SUBREDDITS = [
   // Lista original
   "nsfw",
   "gonewild",
@@ -325,7 +325,7 @@ const BLOCKED_SUBREDDITS$1 = [
   "fapathon",
   "fapfap"
 ];
-const ADULT_KEYWORDS$1 = [
+const ADULT_KEYWORDS = [
   // ── Inglês — termos explícitos ───────────────────────────────────────────
   "nsfw",
   "porn",
@@ -689,7 +689,7 @@ const ADULT_KEYWORDS$1 = [
   "gaand",
   "lund"
 ];
-const PORNSTAR_NAMES$1 = [
+const PORNSTAR_NAMES = [
   // A
   "abella danger",
   "abella",
@@ -760,7 +760,7 @@ const PORNSTAR_NAMES$1 = [
   "yourxdarling",
   "yoursoniya"
 ];
-const ADULT_CHANNELS$1 = [
+const ADULT_CHANNELS = [
   // Plataformas gerais
   "brazzers",
   "bangbros",
@@ -975,9 +975,9 @@ const TWITTER_SEARCH_KEYWORDS = [
   "slut",
   "cock",
   // Pornstars (pesquisas por nome no Twitter)
-  ...PORNSTAR_NAMES$1,
+  ...PORNSTAR_NAMES,
   // Studios/canais
-  ...ADULT_CHANNELS$1
+  ...ADULT_CHANNELS
 ];
 function buildPacScript() {
   return `
@@ -985,12 +985,12 @@ function FindProxyForURL(url, host) {
   var lowerUrl = url.toLowerCase();
   var lowerHost = host.toLowerCase();
 
-  var blockedSubreddits = ${JSON.stringify(BLOCKED_SUBREDDITS$1)};
-  var adultKeywords = ${JSON.stringify(ADULT_KEYWORDS$1)};
+  var blockedSubreddits = ${JSON.stringify(BLOCKED_SUBREDDITS)};
+  var adultKeywords = ${JSON.stringify(ADULT_KEYWORDS)};
   var blockedTwitterPaths = ${JSON.stringify(BLOCKED_TWITTER_PATHS)};
   var twitterSearchKeywords = ${JSON.stringify(TWITTER_SEARCH_KEYWORDS)};
-  var pornstarNames = ${JSON.stringify(PORNSTAR_NAMES$1)};
-  var adultChannels = ${JSON.stringify(ADULT_CHANNELS$1)};
+  var pornstarNames = ${JSON.stringify(PORNSTAR_NAMES)};
+  var adultChannels = ${JSON.stringify(ADULT_CHANNELS)};
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1166,10 +1166,12 @@ function getScriptPath() {
 function getResultPath() {
   return path.join(os.tmpdir(), "quit-blocker-result.json");
 }
-function buildScript() {
+function buildScript(opts = {}) {
   const hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts";
-  const domainLines = ADULT_DOMAINS.map((d) => `0.0.0.0 ${d}`).join("\r\n");
+  const allDomains = [...ADULT_DOMAINS, ...opts.extraDomains ?? []];
+  const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\r\n");
   const pacUrl = PAC_URL;
+  const appPathsJson = JSON.stringify(opts.blockedApps ?? []);
   return `param([string]$Action, [string]$ResultPath)
 
 $result = @{ ok = $true; hostsActive = $false; dnsActive = $false; pacActive = $false; error = "" }
@@ -1182,8 +1184,50 @@ $primaryDNSv6 = "${SAFE_DNS_PRIMARY_V6}"
 $secondaryDNSv6 = "${SAFE_DNS_SECONDARY_V6}"
 $pacUrl = "${pacUrl}"
 $regPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
+$ifeoBase = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options"
+$blockedApps = '${appPathsJson}' | ConvertFrom-Json
+$fakeDebugger = "C:\\Windows\\System32\\ping.exe 0.0.0.0 -n 1"
 
 function Flush-DNS { try { ipconfig /flushdns | Out-Null } catch {} }
+
+function Block-Apps {
+  foreach ($exePath in $blockedApps) {
+    $exeName = [System.IO.Path]::GetFileName($exePath)
+    try {
+      $key = "$ifeoBase\\$exeName"
+      if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+      Set-ItemProperty -Path $key -Name "Debugger" -Value $fakeDebugger -Force
+      $procName = [System.IO.Path]::GetFileNameWithoutExtension($exeName)
+      Get-Process -Name $procName -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    } catch {}
+  }
+}
+
+function Unblock-Apps {
+  foreach ($exePath in $blockedApps) {
+    $exeName = [System.IO.Path]::GetFileName($exePath)
+    try {
+      $key = "$ifeoBase\\$exeName"
+      if (Test-Path $key) {
+        Remove-ItemProperty -Path $key -Name "Debugger" -ErrorAction SilentlyContinue
+        $props = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+        $userProps = $props.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' }
+        if (-not $userProps -or $userProps.Count -eq 0) {
+          Remove-Item -Path $key -Force -ErrorAction SilentlyContinue
+        }
+      }
+    } catch {}
+  }
+  Get-ChildItem $ifeoBase -ErrorAction SilentlyContinue | ForEach-Object {
+    try {
+      $debugger = (Get-ItemProperty $_.PSPath -Name "Debugger" -ErrorAction SilentlyContinue).Debugger
+      if ($debugger -like "*ping.exe 0.0.0.0*") {
+        Remove-ItemProperty -Path $_.PSPath -Name "Debugger" -ErrorAction SilentlyContinue
+      }
+    } catch {}
+  }
+}
 
 function Notify-ProxyChange {
   try {
@@ -1215,7 +1259,7 @@ function Remove-QuitEntries([string]$content) {
 }
 
 function Activate-Block {
-  # 1. Hosts file (ASCII encoding para compatibilidade Windows)
+  # 1. Hosts file
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
   $content = Remove-QuitEntries $content
@@ -1236,10 +1280,13 @@ function Activate-Block {
     try { netsh interface ipv6 add dns "$a" $secondaryDNSv6 index=2 validate=no | Out-Null } catch {}
   }
 
-  # 4. PAC file via registo do Windows (Chrome, Edge, IE)
+  # 4. PAC file
   Set-ItemProperty -Path $regPath -Name "AutoConfigURL" -Value $pacUrl
   Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0
   Notify-ProxyChange
+
+  # 5. Bloqueia apps via IFEO
+  Block-Apps
 
   Flush-DNS
 }
@@ -1251,13 +1298,13 @@ function Deactivate-Block {
   $content = Remove-QuitEntries $content
   [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
 
-  # 2. DNS IPv4 → DHCP
+  # 2. DNS IPv4 -> DHCP
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
     try { netsh interface ip set dns "$a" dhcp | Out-Null } catch {}
   }
 
-  # 3. DNS IPv6 → DHCP
+  # 3. DNS IPv6 -> DHCP
   foreach ($a in $adapters) {
     try { netsh interface ipv6 set dns "$a" dhcp | Out-Null } catch {}
   }
@@ -1266,6 +1313,9 @@ function Deactivate-Block {
   try { Remove-ItemProperty -Path $regPath -Name "AutoConfigURL" -ErrorAction SilentlyContinue } catch {}
   Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0
   Notify-ProxyChange
+
+  # 5. Desbloqueia apps
+  Unblock-Apps
 
   Flush-DNS
 }
@@ -1301,14 +1351,14 @@ try {
 $result | ConvertTo-Json | Set-Content -Path $ResultPath -Encoding UTF8
 `;
 }
-async function runElevated(action) {
+async function runElevated(action, opts = {}) {
   const resultPath = getResultPath();
   try {
     if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
   } catch {
   }
   try {
-    fs.writeFileSync(getScriptPath(), buildScript(), "utf-8");
+    fs.writeFileSync(getScriptPath(), buildScript(opts), "utf-8");
   } catch (err) {
     return { ok: false, error: `Failed to write helper script: ${err}` };
   }
@@ -1358,6 +1408,138 @@ function deactivateRequestInterceptor() {
   interceptorActive = false;
   console.log("✅ Request interceptor deactivated");
 }
+const REDDIT_DOMAINS = [
+  "reddit.com",
+  "www.reddit.com",
+  "old.reddit.com",
+  "new.reddit.com",
+  "oauth.reddit.com",
+  "sh.reddit.com",
+  "gateway.reddit.com",
+  "v.redd.it",
+  "i.redd.it",
+  "preview.redd.it",
+  "external-preview.redd.it"
+];
+const TWITTER_DOMAINS = [
+  "twitter.com",
+  "www.twitter.com",
+  "x.com",
+  "www.x.com",
+  "t.co",
+  "abs.twimg.com",
+  "pbs.twimg.com",
+  "video.twimg.com",
+  "api.twitter.com",
+  "api.x.com",
+  "upload.twitter.com"
+];
+function getFilePath() {
+  return path.join(electron.app.getPath("userData"), "custom-blocklist.json");
+}
+function loadCustomBlocklist() {
+  try {
+    const raw = fs.readFileSync(getFilePath(), "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function saveCustomBlocklist(bl) {
+  fs.writeFileSync(getFilePath(), JSON.stringify(bl, null, 2), "utf-8");
+}
+function clearCustomBlocklist() {
+  try {
+    fs.unlinkSync(getFilePath());
+  } catch {
+  }
+}
+function getCustomDomains(bl) {
+  const domains = [];
+  if (bl.blockReddit) domains.push(...REDDIT_DOMAINS);
+  if (bl.blockTwitter) domains.push(...TWITTER_DOMAINS);
+  for (const url2 of bl.blockedUrls) {
+    const d = normalizeDomain(url2);
+    if (d && !domains.includes(d)) domains.push(d, `www.${d}`);
+  }
+  return domains;
+}
+function getInstalledApps() {
+  const tmpScript = path.join(os.tmpdir(), "quit-list-apps.ps1");
+  const tmpResult = path.join(os.tmpdir(), "quit-list-apps.json");
+  const script = `
+$apps = @()
+$paths = @(
+  'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+  'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+  'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+)
+foreach ($p in $paths) {
+  Get-ItemProperty $p -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -and ($_.DisplayIcon -or $_.InstallLocation) } |
+    ForEach-Object {
+      $name = $_.DisplayName.Trim()
+
+      # Tenta DisplayIcon primeiro (remove parâmetros de ícone como ",0")
+      $icon = ($_.DisplayIcon -replace '"','').Trim()
+      $icon = ($icon -split ',')[0].Trim()
+
+      # Se não for .exe, tenta InstallLocation + nome do exe
+      $exe = ""
+      if ($icon -match '\\.exe$' -and (Test-Path $icon)) {
+        $exe = $icon
+      } elseif ($_.InstallLocation -and (Test-Path $_.InstallLocation)) {
+        $found = Get-ChildItem $_.InstallLocation -Filter "*.exe" -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -notmatch '(uninstall|setup|update|redist|vcredist|repair)' } |
+          Select-Object -First 1
+        if ($found) { $exe = $found.FullName }
+      }
+
+      if ($exe -ne "" -and $name -ne "") {
+        $apps += [PSCustomObject]@{ name = $name; exePath = $exe }
+      }
+    }
+}
+$apps | Sort-Object name -Unique | ConvertTo-Json -Compress | Set-Content -Path '${tmpResult.replace(/\\/g, "\\\\")}' -Encoding UTF8
+`.trim();
+  try {
+    fs.writeFileSync(tmpScript, script, "utf-8");
+    child_process.execSync(
+      `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpScript}"`,
+      { encoding: "utf-8", timeout: 15e3, stdio: ["pipe", "pipe", "ignore"] }
+    );
+    if (!fs.existsSync(tmpResult)) return [];
+    const raw = fs.readFileSync(tmpResult, "utf-8").trim();
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const arr = Array.isArray(parsed) ? parsed : [parsed];
+    return arr.filter((a) => a.name && a.exePath).map((a) => ({ name: String(a.name).trim(), exePath: String(a.exePath).trim() })).slice(0, 300);
+  } catch (err) {
+    console.error("[customBlocklist] getInstalledApps failed:", err);
+    return [];
+  } finally {
+    try {
+      fs.unlinkSync(tmpScript);
+    } catch {
+    }
+    try {
+      fs.unlinkSync(tmpResult);
+    } catch {
+    }
+  }
+}
+function normalizeDomain(input) {
+  try {
+    let s = input.trim().toLowerCase();
+    if (!s.startsWith("http")) s = "https://" + s;
+    const u = new URL(s);
+    const host = u.hostname.replace(/^www\./, "");
+    if (!host.includes(".")) return null;
+    return host;
+  } catch {
+    return null;
+  }
+}
 function getStatePath() {
   return path.join(electron.app.getPath("userData"), "blocker-state.json");
 }
@@ -1371,28 +1553,43 @@ function loadBlockerState() {
 function saveBlockerState(state) {
   fs.writeFileSync(getStatePath(), JSON.stringify(state, null, 2), "utf-8");
 }
-async function activateBlocker(challengeId) {
+function buildElevatedOpts(bl) {
+  return {
+    extraDomains: getCustomDomains(bl),
+    blockedApps: bl.blockedApps.map((a) => a.exePath)
+  };
+}
+async function activateBlocker(challengeId, customBl) {
   console.log("🔒 Activating blocker for challenge:", challengeId);
+  if (customBl) {
+    saveCustomBlocklist({ ...customBl, addedAt: (/* @__PURE__ */ new Date()).toISOString() });
+  }
+  const bl = customBl ?? loadCustomBlocklist() ?? {
+    blockReddit: false,
+    blockTwitter: false,
+    blockedApps: [],
+    blockedUrls: [],
+    addedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
   await startPacServer();
   activateRequestInterceptor();
-  const result = await runElevated("activate");
-  saveBlockerState({
-    active: true,
-    activatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    challengeId
-  });
+  const result = await runElevated("activate", buildElevatedOpts(bl));
+  saveBlockerState({ active: true, activatedAt: (/* @__PURE__ */ new Date()).toISOString(), challengeId });
   if (result.ok) {
-    console.log("✅ Blocker fully activated (PAC + interceptor + hosts + DNS)");
+    console.log("✅ Blocker fully activated");
   } else {
-    console.warn("⚠️  System-level failed, PAC + interceptor still active:", result.error);
+    console.warn("⚠️  System-level failed:", result.error);
   }
   return { ok: true };
 }
 async function deactivateBlocker() {
   console.log("🔓 Deactivating blocker...");
   deactivateRequestInterceptor();
-  const result = await runElevated("deactivate");
+  const bl = loadCustomBlocklist();
+  const opts = bl ? buildElevatedOpts(bl) : {};
+  const result = await runElevated("deactivate", opts);
   stopPacServer();
+  clearCustomBlocklist();
   saveBlockerState({ active: false, activatedAt: null, challengeId: null });
   if (result.ok) {
     console.log("✅ Blocker fully deactivated");
@@ -1400,6 +1597,34 @@ async function deactivateBlocker() {
     console.warn("⚠️  System-level deactivation failed:", result.error);
   }
   return result;
+}
+async function addToActiveBlocker(payload) {
+  const state = loadBlockerState();
+  if (!state.active) return { ok: false, error: "Nenhum bloqueador activo." };
+  let bl = loadCustomBlocklist() ?? {
+    blockReddit: false,
+    blockTwitter: false,
+    blockedApps: [],
+    blockedUrls: [],
+    addedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  if (payload.url) {
+    const domain = normalizeDomain(payload.url);
+    if (!domain) return { ok: false, error: "URL inválido." };
+    if (bl.blockedUrls.includes(domain)) return { ok: false, error: "Já está na lista." };
+    bl = { ...bl, blockedUrls: [...bl.blockedUrls, domain] };
+  }
+  if (payload.app) {
+    if (bl.blockedApps.some((a) => a.exePath === payload.app.exePath)) {
+      return { ok: false, error: "App já está na lista." };
+    }
+    bl = { ...bl, blockedApps: [...bl.blockedApps, payload.app] };
+  }
+  if (payload.blockReddit !== void 0) bl = { ...bl, blockReddit: payload.blockReddit };
+  if (payload.blockTwitter !== void 0) bl = { ...bl, blockTwitter: payload.blockTwitter };
+  saveCustomBlocklist(bl);
+  const result = await runElevated("activate", buildElevatedOpts(bl));
+  return result.ok ? { ok: true } : { ok: false, error: result.error };
 }
 async function loadAndRestoreInterceptor() {
   const state = loadBlockerState();
@@ -4984,8 +5209,9 @@ var ZodFirstPartyTypeKind;
 })(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
 const stringType = ZodString.create;
 const numberType = ZodNumber.create;
+const booleanType = ZodBoolean.create;
 ZodNever.create;
-ZodArray.create;
+const arrayType = ZodArray.create;
 const objectType = ZodObject.create;
 ZodUnion.create;
 ZodIntersection.create;
@@ -5019,41 +5245,68 @@ electron.ipcMain.handle("auth:logout", async () => {
   setToken(null);
   return { ok: true };
 });
+const BlockedAppSchema = objectType({
+  name: stringType(),
+  exePath: stringType()
+});
 const CreateSchema = objectType({
   durationDays: numberType().int().min(7),
-  reason: stringType().min(10).max(500).trim()
+  reason: stringType().min(10).max(500).trim(),
+  // Preferências de bloqueio custom (opcionais)
+  blockReddit: booleanType().optional().default(false),
+  blockTwitter: booleanType().optional().default(false),
+  blockedApps: arrayType(BlockedAppSchema).optional().default([]),
+  blockedUrls: arrayType(stringType().max(200)).optional().default([])
 });
 const QuitRequestSchema = objectType({
   id: stringType(),
   feeling: stringType().min(5).max(1e3).trim()
 });
+async function syncBlockerWithChallengeState(challenge) {
+  const blockerState = loadBlockerState();
+  if (!blockerState.active) return;
+  if (challenge === null) {
+    console.log("🔓 No active challenge detected — deactivating blocker automatically");
+    await deactivateBlocker();
+    return;
+  }
+  if (challenge.status !== "active") {
+    console.log(`🔓 Challenge status is '${challenge.status}' — deactivating blocker`);
+    await deactivateBlocker();
+  }
+}
 electron.ipcMain.handle("challenge:create", async (_e, payload) => {
   var _a;
   const parsed = CreateSchema.safeParse(payload);
   if (!parsed.success) return { error: ((_a = parsed.error.errors[0]) == null ? void 0 : _a.message) ?? "Dados inválidos" };
   const res = await createChallenge(parsed.data.durationDays, parsed.data.reason);
   if (res.error || !res.data) return { error: res.error ?? "Erro ao criar desafio" };
+  const customBl = {
+    blockReddit: parsed.data.blockReddit ?? false,
+    blockTwitter: parsed.data.blockTwitter ?? false,
+    blockedApps: parsed.data.blockedApps ?? [],
+    blockedUrls: parsed.data.blockedUrls ?? [],
+    addedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
   console.log("🔒 Challenge created, activating blocker...");
-  const blockerResult = await activateBlocker(res.data.id);
-  if (!blockerResult.ok) {
-    console.warn("⚠️  Blocker activation failed:", blockerResult.error);
-  }
+  const blockerResult = await activateBlocker(res.data.id, customBl);
+  if (!blockerResult.ok) console.warn("⚠️  Blocker activation failed:", blockerResult.error);
   return { ok: true, challenge: res.data, blockerActive: blockerResult.ok };
 });
 electron.ipcMain.handle("challenge:active", async () => {
   var _a;
   const res = await getActiveChallenge();
-  return res.error ? { error: res.error } : { ok: true, challenge: ((_a = res.data) == null ? void 0 : _a.challenge) ?? null };
+  if (res.error) return { error: res.error };
+  const challenge = ((_a = res.data) == null ? void 0 : _a.challenge) ?? null;
+  await syncBlockerWithChallengeState(challenge);
+  return { ok: true, challenge };
 });
 electron.ipcMain.handle("challenge:cancel", async (_e, id) => {
   if (typeof id !== "string") return { error: "ID inválido" };
   const res = await cancelChallenge(id);
   if (res.error || !res.data) return { error: res.error ?? "Erro ao cancelar" };
   console.log("🔓 Challenge cancelled, deactivating blocker...");
-  const blockerResult = await deactivateBlocker();
-  if (!blockerResult.ok) {
-    console.warn("⚠️  Blocker deactivation failed:", blockerResult.error);
-  }
+  await deactivateBlocker();
   return { ok: true, challenge: res.data };
 });
 electron.ipcMain.handle("challenge:quit-request:create", async (_e, payload) => {
@@ -5075,7 +5328,16 @@ electron.ipcMain.handle("challenge:history", async () => {
 });
 electron.ipcMain.handle("blocker:status", async () => {
   const state = loadBlockerState();
-  return { ok: true, active: state.active, challengeId: state.challengeId };
+  const custom = loadCustomBlocklist();
+  return {
+    ok: true,
+    active: state.active,
+    challengeId: state.challengeId,
+    blockReddit: (custom == null ? void 0 : custom.blockReddit) ?? false,
+    blockTwitter: (custom == null ? void 0 : custom.blockTwitter) ?? false,
+    blockedApps: (custom == null ? void 0 : custom.blockedApps) ?? [],
+    blockedUrls: (custom == null ? void 0 : custom.blockedUrls) ?? []
+  };
 });
 electron.ipcMain.handle("blocker:activate", async (_e, challengeId) => {
   if (typeof challengeId !== "string") return { error: "challengeId inválido" };
@@ -5089,6 +5351,22 @@ electron.ipcMain.handle("blocker:deactivate", async () => {
 electron.ipcMain.handle("blocker:full-status", async () => {
   const status = await getBlockerStatus();
   return { ok: true, ...status };
+});
+electron.ipcMain.handle("blocker:installed-apps", async () => {
+  const apps = getInstalledApps();
+  return { ok: true, apps };
+});
+electron.ipcMain.handle("blocker:add", async (_e, payload) => {
+  const schema = objectType({
+    url: stringType().min(3).max(200).optional(),
+    app: objectType({ name: stringType(), exePath: stringType() }).optional(),
+    blockReddit: booleanType().optional(),
+    blockTwitter: booleanType().optional()
+  });
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) return { error: "Payload inválido" };
+  const result = await addToActiveBlocker(parsed.data);
+  return result.ok ? { ok: true } : { error: result.error };
 });
 const logFile = path.join(electron.app.getPath("userData"), "blocker-debug.log");
 const logStream = fs.createWriteStream(logFile, { flags: "a" });

@@ -15,12 +15,18 @@ import {
 import { PAC_URL } from "./pacServer.js";
 
 export type BlockerAction = "activate" | "deactivate" | "status";
+
 export interface HelperResult {
   ok: boolean;
   hostsActive?: boolean;
   dnsActive?: boolean;
   pacActive?: boolean;
   error?: string;
+}
+
+export interface ElevatedOptions {
+  extraDomains?: string[];  // Reddit, Twitter, URLs custom
+  blockedApps?: string[];   // paths de .exe a bloquear via IFEO
 }
 
 function getScriptPath(): string {
@@ -30,10 +36,12 @@ function getResultPath(): string {
   return path.join(os.tmpdir(), "quit-blocker-result.json");
 }
 
-function buildScript(): string {
+function buildScript(opts: ElevatedOptions = {}): string {
   const hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts";
-  const domainLines = ADULT_DOMAINS.map(d => `0.0.0.0 ${d}`).join("\r\n");
+  const allDomains = [...ADULT_DOMAINS, ...(opts.extraDomains ?? [])];
+  const domainLines = allDomains.map(d => `0.0.0.0 ${d}`).join("\r\n");
   const pacUrl = PAC_URL;
+  const appPathsJson = JSON.stringify(opts.blockedApps ?? []);
 
   return `param([string]$Action, [string]$ResultPath)
 
@@ -47,8 +55,50 @@ $primaryDNSv6 = "${SAFE_DNS_PRIMARY_V6}"
 $secondaryDNSv6 = "${SAFE_DNS_SECONDARY_V6}"
 $pacUrl = "${pacUrl}"
 $regPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
+$ifeoBase = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options"
+$blockedApps = '${appPathsJson}' | ConvertFrom-Json
+$fakeDebugger = "C:\\Windows\\System32\\ping.exe 0.0.0.0 -n 1"
 
 function Flush-DNS { try { ipconfig /flushdns | Out-Null } catch {} }
+
+function Block-Apps {
+  foreach ($exePath in $blockedApps) {
+    $exeName = [System.IO.Path]::GetFileName($exePath)
+    try {
+      $key = "$ifeoBase\\$exeName"
+      if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+      Set-ItemProperty -Path $key -Name "Debugger" -Value $fakeDebugger -Force
+      $procName = [System.IO.Path]::GetFileNameWithoutExtension($exeName)
+      Get-Process -Name $procName -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    } catch {}
+  }
+}
+
+function Unblock-Apps {
+  foreach ($exePath in $blockedApps) {
+    $exeName = [System.IO.Path]::GetFileName($exePath)
+    try {
+      $key = "$ifeoBase\\$exeName"
+      if (Test-Path $key) {
+        Remove-ItemProperty -Path $key -Name "Debugger" -ErrorAction SilentlyContinue
+        $props = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+        $userProps = $props.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' }
+        if (-not $userProps -or $userProps.Count -eq 0) {
+          Remove-Item -Path $key -Force -ErrorAction SilentlyContinue
+        }
+      }
+    } catch {}
+  }
+  Get-ChildItem $ifeoBase -ErrorAction SilentlyContinue | ForEach-Object {
+    try {
+      $debugger = (Get-ItemProperty $_.PSPath -Name "Debugger" -ErrorAction SilentlyContinue).Debugger
+      if ($debugger -like "*ping.exe 0.0.0.0*") {
+        Remove-ItemProperty -Path $_.PSPath -Name "Debugger" -ErrorAction SilentlyContinue
+      }
+    } catch {}
+  }
+}
 
 function Notify-ProxyChange {
   try {
@@ -80,7 +130,7 @@ function Remove-QuitEntries([string]$content) {
 }
 
 function Activate-Block {
-  # 1. Hosts file (ASCII encoding para compatibilidade Windows)
+  # 1. Hosts file
   $content = ""
   if (Test-Path $hostsPath) { $content = [System.IO.File]::ReadAllText($hostsPath) }
   $content = Remove-QuitEntries $content
@@ -101,10 +151,13 @@ function Activate-Block {
     try { netsh interface ipv6 add dns "$a" $secondaryDNSv6 index=2 validate=no | Out-Null } catch {}
   }
 
-  # 4. PAC file via registo do Windows (Chrome, Edge, IE)
+  # 4. PAC file
   Set-ItemProperty -Path $regPath -Name "AutoConfigURL" -Value $pacUrl
   Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0
   Notify-ProxyChange
+
+  # 5. Bloqueia apps via IFEO
+  Block-Apps
 
   Flush-DNS
 }
@@ -116,13 +169,13 @@ function Deactivate-Block {
   $content = Remove-QuitEntries $content
   [System.IO.File]::WriteAllText($hostsPath, $content, [System.Text.Encoding]::ASCII)
 
-  # 2. DNS IPv4 → DHCP
+  # 2. DNS IPv4 -> DHCP
   $adapters = Get-ActiveAdapters
   foreach ($a in $adapters) {
     try { netsh interface ip set dns "$a" dhcp | Out-Null } catch {}
   }
 
-  # 3. DNS IPv6 → DHCP
+  # 3. DNS IPv6 -> DHCP
   foreach ($a in $adapters) {
     try { netsh interface ipv6 set dns "$a" dhcp | Out-Null } catch {}
   }
@@ -131,6 +184,9 @@ function Deactivate-Block {
   try { Remove-ItemProperty -Path $regPath -Name "AutoConfigURL" -ErrorAction SilentlyContinue } catch {}
   Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0
   Notify-ProxyChange
+
+  # 5. Desbloqueia apps
+  Unblock-Apps
 
   Flush-DNS
 }
@@ -167,12 +223,12 @@ $result | ConvertTo-Json | Set-Content -Path $ResultPath -Encoding UTF8
 `;
 }
 
-export async function runElevated(action: BlockerAction): Promise<HelperResult> {
+export async function runElevated(action: BlockerAction, opts: ElevatedOptions = {}): Promise<HelperResult> {
   const resultPath = getResultPath();
   try { if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath); } catch {}
 
   try {
-    fs.writeFileSync(getScriptPath(), buildScript(), "utf-8");
+    fs.writeFileSync(getScriptPath(), buildScript(opts), "utf-8");
   } catch (err) {
     return { ok: false, error: `Failed to write helper script: ${err}` };
   }

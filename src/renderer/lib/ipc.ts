@@ -14,6 +14,35 @@ export interface ChallengeData {
   progress: ChallengeProgress;
 }
 
+export interface BlockedApp { name: string; exePath: string; }
+export interface InstalledApp { name: string; exePath: string; }
+
+export interface BlockerStatus {
+  ok?: boolean;
+  active: boolean;
+  challengeId: string | null;
+  blockReddit: boolean;
+  blockTwitter: boolean;
+  blockedApps: BlockedApp[];
+  blockedUrls: string[];
+}
+
+export interface CreateChallengePayload {
+  durationDays: number;
+  reason: string;
+  blockReddit?: boolean;
+  blockTwitter?: boolean;
+  blockedApps?: BlockedApp[];
+  blockedUrls?: string[];
+}
+
+export interface AddToBlockerPayload {
+  url?: string;
+  app?: BlockedApp;
+  blockReddit?: boolean;
+  blockTwitter?: boolean;
+}
+
 interface QuitAPI {
   auth: {
     requestOtp: (email: string) => Promise<{ ok?: boolean; error?: string }>;
@@ -22,7 +51,7 @@ interface QuitAPI {
     logout: () => Promise<{ ok?: boolean }>;
   };
   challenge: {
-    create: (durationDays: number, reason: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData; blockerActive?: boolean }>;
+    create: (payload: CreateChallengePayload) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData; blockerActive?: boolean }>;
     active: () => Promise<{ ok?: boolean; error?: string; challenge: ChallengeData | null }>;
     cancel: (id: string) => Promise<{ ok?: boolean; error?: string; challenge?: ChallengeData }>;
     quitRequest: {
@@ -32,7 +61,9 @@ interface QuitAPI {
     history: () => Promise<{ ok?: boolean; error?: string; challenges?: ChallengeData[] }>;
   };
   blocker: {
-    status: () => Promise<{ ok?: boolean; active: boolean; challengeId: string | null }>;
+    status: () => Promise<BlockerStatus>;
+    installedApps: () => Promise<{ ok?: boolean; apps: InstalledApp[] }>;
+    add: (payload: AddToBlockerPayload) => Promise<{ ok?: boolean; error?: string }>;
   };
 }
 
@@ -46,7 +77,7 @@ export const ipc = {
     logout: () => getQuit().auth.logout(),
   },
   challenge: {
-    create: (durationDays: number, reason: string) => getQuit().challenge.create(durationDays, reason),
+    create: (payload: CreateChallengePayload) => getQuit().challenge.create(payload),
     active: () => getQuit().challenge.active(),
     cancel: (id: string) => getQuit().challenge.cancel(id),
     quitRequest: {
@@ -57,5 +88,7 @@ export const ipc = {
   },
   blocker: {
     status: () => getQuit().blocker.status(),
+    installedApps: () => getQuit().blocker.installedApps(),
+    add: (payload: AddToBlockerPayload) => getQuit().blocker.add(payload),
   },
 };

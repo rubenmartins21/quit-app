@@ -8,8 +8,14 @@ contextBridge.exposeInMainWorld("quit", {
     logout: () => ipcRenderer.invoke("auth:logout"),
   },
   challenge: {
-    create: (durationDays: number, reason: string) =>
-      ipcRenderer.invoke("challenge:create", { durationDays, reason }),
+    create: (payload: {
+      durationDays: number;
+      reason: string;
+      blockReddit?: boolean;
+      blockTwitter?: boolean;
+      blockedApps?: { name: string; exePath: string }[];
+      blockedUrls?: string[];
+    }) => ipcRenderer.invoke("challenge:create", payload),
     active: () => ipcRenderer.invoke("challenge:active"),
     cancel: (id: string) => ipcRenderer.invoke("challenge:cancel", id),
     quitRequest: {
@@ -22,5 +28,12 @@ contextBridge.exposeInMainWorld("quit", {
   },
   blocker: {
     status: () => ipcRenderer.invoke("blocker:status"),
+    installedApps: () => ipcRenderer.invoke("blocker:installed-apps"),
+    add: (payload: {
+      url?: string;
+      app?: { name: string; exePath: string };
+      blockReddit?: boolean;
+      blockTwitter?: boolean;
+    }) => ipcRenderer.invoke("blocker:add", payload),
   },
 });
