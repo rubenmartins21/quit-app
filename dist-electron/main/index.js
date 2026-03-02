@@ -1348,7 +1348,8 @@ try {
   $result["error"] = $_.Exception.Message
 }
 
-$result | ConvertTo-Json | Set-Content -Path $ResultPath -Encoding UTF8
+$json = $result | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText($ResultPath, $json, [System.Text.Encoding]::UTF8)
 `;
 }
 async function runElevated(action, opts = {}) {
@@ -1380,7 +1381,8 @@ async function runElevated(action, opts = {}) {
           });
           return;
         }
-        resolve(JSON.parse(fs.readFileSync(resultPath, "utf-8")));
+        const raw = fs.readFileSync(resultPath, "utf-8").replace(/^\uFEFF/, "").trim();
+        resolve(JSON.parse(raw));
       } catch (err) {
         resolve({ ok: false, error: `Failed to read result: ${err}` });
       }
