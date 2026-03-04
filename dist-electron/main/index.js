@@ -1160,13 +1160,527 @@ function stopPacServer() {
   }
 }
 const PAC_URL = `http://127.0.0.1:${PAC_PORT}/proxy.pac`;
+function getScriptPath$1() {
+  return path.join(electron.app.getPath("userData"), "quit-blocker-helper.sh");
+}
+function getResultPath$2() {
+  return path.join(os.tmpdir(), "quit-blocker-result.json");
+}
+function toBashArray$1(paths) {
+  if (paths.length === 0) return "()";
+  return "(" + paths.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(" ") + ")";
+}
+function buildScript$1(opts = {}) {
+  const allDomains = [...ADULT_DOMAINS, ...opts.extraDomains ?? []];
+  const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\n");
+  const resultPath = getResultPath$2();
+  const appPaths = toBashArray$1(opts.blockedApps ?? []);
+  return `#!/bin/bash
+# Gerado pelo quit-blocker — nao editar manualmente
+set -uo pipefail
+
+ACTION="\${1:-status}"
+RESULT_PATH="${resultPath}"
+HOSTS_PATH="/etc/hosts"
+MARKER_START="${HOSTS_MARKER_START}"
+MARKER_END="${HOSTS_MARKER_END}"
+PRIMARY_DNS="${SAFE_DNS_PRIMARY}"
+SECONDARY_DNS="${SAFE_DNS_SECONDARY}"
+PAC_URL="${PAC_URL}"
+
+HOSTS_ACTIVE=false
+DNS_ACTIVE=false
+PAC_ACTIVE=false
+OK=true
+
+APP_PATHS=${appPaths}
+
+# ── find_binary: localiza executavel de .app bundle ou path directo ───────────
+find_binary() {
+  local p="$1"
+  if [ -f "$p" ]; then echo "$p"; return 0; fi
+  if [ -d "$p" ]; then
+    local name bin first
+    name=$(basename "$p" .app)
+    bin="$p/Contents/MacOS/$name"
+    if [ -f "$bin" ]; then echo "$bin"; return 0; fi
+    first=$(find "$p/Contents/MacOS" -maxdepth 1 -type f -perm +111 2>/dev/null | head -1 || true)
+    if [ -n "$first" ]; then echo "$first"; return 0; fi
+  fi
+  echo ""; return 1
+}
+
+# ── Servicos de rede activos (excluindo desactivados marcados com *) ──────────
+get_network_services() {
+  networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | grep -v '^*' || true
+}
+
+# ── Hosts file ────────────────────────────────────────────────────────────────
+remove_quit_entries() {
+  local tmp
+  tmp=$(mktemp) || return 0
+  awk "/^$MARKER_START$/{skip=1;next}/^$MARKER_END$/{skip=0;next}!skip{print}" \\
+    "$HOSTS_PATH" > "$tmp" 2>/dev/null && cat "$tmp" > "$HOSTS_PATH" 2>/dev/null || true
+  rm -f "$tmp"
+}
+
+activate_hosts() {
+  remove_quit_entries
+  {
+    printf '\\n%s\\n' "$MARKER_START"
+    printf '%s\\n' "${domainLines}"
+    printf '%s\\n' "$MARKER_END"
+  } >> "$HOSTS_PATH" 2>/dev/null || true
+  dscacheutil -flushcache 2>/dev/null || true
+  killall -HUP mDNSResponder 2>/dev/null || true
+}
+
+deactivate_hosts() {
+  remove_quit_entries
+  dscacheutil -flushcache 2>/dev/null || true
+  killall -HUP mDNSResponder 2>/dev/null || true
+}
+
+# ── DNS via networksetup ──────────────────────────────────────────────────────
+activate_dns() {
+  local svc
+  while IFS= read -r svc; do
+    [ -z "$svc" ] && continue
+    networksetup -setdnsservers "$svc" "$PRIMARY_DNS" "$SECONDARY_DNS" 2>/dev/null || true
+  done < <(get_network_services)
+}
+
+deactivate_dns() {
+  local svc
+  while IFS= read -r svc; do
+    [ -z "$svc" ] && continue
+    networksetup -setdnsservers "$svc" "Empty" 2>/dev/null || true
+  done < <(get_network_services)
+  dscacheutil -flushcache 2>/dev/null || true
+  killall -HUP mDNSResponder 2>/dev/null || true
+}
+
+# ── PAC via networksetup ──────────────────────────────────────────────────────
+activate_pac() {
+  local svc
+  while IFS= read -r svc; do
+    [ -z "$svc" ] && continue
+    networksetup -setautoproxyurl "$svc" "$PAC_URL" 2>/dev/null || true
+    networksetup -setautoproxystate "$svc" on 2>/dev/null || true
+  done < <(get_network_services)
+}
+
+deactivate_pac() {
+  local svc
+  while IFS= read -r svc; do
+    [ -z "$svc" ] && continue
+    networksetup -setautoproxystate "$svc" off 2>/dev/null || true
+  done < <(get_network_services)
+}
+
+# ── Apps via chmod a-x ────────────────────────────────────────────────────────
+block_apps() {
+  local app_path bin pname
+  [ "\${#APP_PATHS[@]}" -eq 0 ] && return 0
+  for app_path in "\${APP_PATHS[@]}"; do
+    bin=$(find_binary "$app_path" 2>/dev/null || true)
+    [ -z "$bin" ] && continue
+    chmod a-x "$bin" 2>/dev/null || true
+    pname=$(basename "$bin")
+    pkill -x "$pname" 2>/dev/null || true
+  done
+}
+
+unblock_apps() {
+  local app_path bin
+  [ "\${#APP_PATHS[@]}" -eq 0 ] && return 0
+  for app_path in "\${APP_PATHS[@]}"; do
+    bin=$(find_binary "$app_path" 2>/dev/null || true)
+    [ -z "$bin" ] && continue
+    chmod a+x "$bin" 2>/dev/null || true
+  done
+}
+
+# ── Status ────────────────────────────────────────────────────────────────────
+check_status() {
+  local first_svc dns_out pac_out
+  grep -q "$MARKER_START" "$HOSTS_PATH" 2>/dev/null && HOSTS_ACTIVE=true || true
+
+  first_svc=$(get_network_services | head -1)
+  if [ -n "$first_svc" ]; then
+    dns_out=$(networksetup -getdnsservers "$first_svc" 2>/dev/null || true)
+    echo "$dns_out" | grep -q "$PRIMARY_DNS" && DNS_ACTIVE=true || true
+
+    pac_out=$(networksetup -getautoproxyurl "$first_svc" 2>/dev/null || true)
+    echo "$pac_out" | grep -q "$PAC_URL" && PAC_ACTIVE=true || true
+  fi
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+main() {
+  case "\${ACTION}" in
+    activate)   activate_hosts; activate_dns; activate_pac; block_apps ;;
+    deactivate) deactivate_hosts; deactivate_dns; deactivate_pac; unblock_apps ;;
+    status)     check_status ;;
+    *)          OK=false ;;
+  esac
+}
+
+main || { OK=false; }
+
+# JSON com printf — sem heredoc para evitar problemas de expansao com $ERROR
+printf '{"ok":%s,"hostsActive":%s,"dnsActive":%s,"pacActive":%s,"error":""}
+' \\
+  "$OK" "$HOSTS_ACTIVE" "$DNS_ACTIVE" "$PAC_ACTIVE" > "$RESULT_PATH" || true
+`;
+}
+async function runElevatedMac(action, opts = {}) {
+  const resultPath = getResultPath$2();
+  try {
+    if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
+  } catch {
+  }
+  const scriptPath = getScriptPath$1();
+  try {
+    fs.writeFileSync(scriptPath, buildScript$1(opts), "utf-8");
+    fs.chmodSync(scriptPath, 448);
+  } catch (err) {
+    return { ok: false, error: `Failed to write helper script: ${err}` };
+  }
+  return new Promise((resolve) => {
+    const escapedPath = scriptPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const appleScript = `do shell script "bash \\"${escapedPath}\\" ${action}" with administrator privileges`;
+    const proc = child_process.spawn("osascript", ["-e", appleScript]);
+    proc.on("close", (code) => {
+      try {
+        if (!fs.existsSync(resultPath)) {
+          resolve({
+            ok: false,
+            error: code !== 0 ? "Operação cancelada pelo utilizador." : "Script falhou silenciosamente."
+          });
+          return;
+        }
+        const raw = fs.readFileSync(resultPath, "utf-8").trim();
+        resolve(JSON.parse(raw));
+      } catch (err) {
+        resolve({ ok: false, error: `Failed to read result: ${err}` });
+      }
+    });
+    proc.on("error", (err) => resolve({ ok: false, error: err.message }));
+  });
+}
 function getScriptPath() {
+  return path.join(electron.app.getPath("userData"), "quit-blocker-helper.sh");
+}
+function getResultPath$1() {
+  return path.join(os.tmpdir(), "quit-blocker-result.json");
+}
+function detectElevationMethod() {
+  for (const m of ["pkexec", "gksudo", "kdesudo"]) {
+    try {
+      child_process.execSync(`which ${m}`, { stdio: "ignore" });
+      return m;
+    } catch {
+    }
+  }
+  return "none";
+}
+function toBashArray(paths) {
+  if (paths.length === 0) return "()";
+  return "(" + paths.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(" ") + ")";
+}
+function buildScript(opts = {}) {
+  const allDomains = [...ADULT_DOMAINS, ...opts.extraDomains ?? []];
+  const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\n");
+  const resultPath = getResultPath$1();
+  const appPaths = toBashArray(opts.blockedApps ?? []);
+  return `#!/bin/bash
+# Gerado pelo quit-blocker — nao editar manualmente
+# Executado como root via pkexec/gksudo
+set -uo pipefail
+
+ACTION="\${1:-status}"
+RESULT_PATH="${resultPath}"
+HOSTS_PATH="/etc/hosts"
+MARKER_START="${HOSTS_MARKER_START}"
+MARKER_END="${HOSTS_MARKER_END}"
+PRIMARY_DNS="${SAFE_DNS_PRIMARY}"
+SECONDARY_DNS="${SAFE_DNS_SECONDARY}"
+PAC_URL="${PAC_URL}"
+
+HOSTS_ACTIVE=false
+DNS_ACTIVE=false
+PAC_ACTIVE=false
+OK=true
+
+APP_PATHS=${appPaths}
+
+# ── Flush DNS cache ───────────────────────────────────────────────────────────
+flush_dns() {
+  systemd-resolve --flush-caches 2>/dev/null || resolvectl flush-caches 2>/dev/null || true
+}
+
+# ── Hosts file ────────────────────────────────────────────────────────────────
+remove_quit_entries() {
+  local tmp
+  tmp=$(mktemp) || return 0
+  awk "/^$MARKER_START$/{skip=1;next}/^$MARKER_END$/{skip=0;next}!skip{print}" \\
+    "$HOSTS_PATH" > "$tmp" 2>/dev/null && cat "$tmp" > "$HOSTS_PATH" 2>/dev/null || true
+  rm -f "$tmp"
+}
+
+activate_hosts() {
+  remove_quit_entries
+  {
+    printf '\\n%s\\n' "$MARKER_START"
+    printf '%s\\n' "${domainLines}"
+    printf '%s\\n' "$MARKER_END"
+  } >> "$HOSTS_PATH" 2>/dev/null || true
+  flush_dns
+}
+
+deactivate_hosts() {
+  remove_quit_entries
+  flush_dns
+}
+
+# ── DNS via NetworkManager (nmcli) ────────────────────────────────────────────
+activate_dns_nm() {
+  local connections conn
+  connections=$(nmcli -t -f NAME connection show --active 2>/dev/null | head -20 || true)
+  [ -z "$connections" ] && return 1
+  while IFS= read -r conn; do
+    [ -z "$conn" ] && continue
+    nmcli connection modify "$conn" ipv4.dns "$PRIMARY_DNS $SECONDARY_DNS" 2>/dev/null || true
+    nmcli connection modify "$conn" ipv4.ignore-auto-dns yes 2>/dev/null || true
+    nmcli connection modify "$conn" ipv6.dns "" 2>/dev/null || true
+    nmcli connection up "$conn" 2>/dev/null || true
+  done <<< "$connections"
+  return 0
+}
+
+deactivate_dns_nm() {
+  local connections conn
+  connections=$(nmcli -t -f NAME connection show --active 2>/dev/null | head -20 || true)
+  [ -z "$connections" ] && return 1
+  while IFS= read -r conn; do
+    [ -z "$conn" ] && continue
+    nmcli connection modify "$conn" ipv4.dns "" 2>/dev/null || true
+    nmcli connection modify "$conn" ipv4.ignore-auto-dns no 2>/dev/null || true
+    nmcli connection up "$conn" 2>/dev/null || true
+  done <<< "$connections"
+  return 0
+}
+
+# ── DNS via systemd-resolved (/etc/systemd/resolved.conf.d/) ─────────────────
+activate_dns_resolved() {
+  mkdir -p /etc/systemd/resolved.conf.d/
+  printf '[Resolve]\\nDNS=%s %s\\n' "$PRIMARY_DNS" "$SECONDARY_DNS" \\
+    > /etc/systemd/resolved.conf.d/quit-blocker.conf 2>/dev/null || true
+  systemctl restart systemd-resolved 2>/dev/null || true
+}
+
+deactivate_dns_resolved() {
+  rm -f /etc/systemd/resolved.conf.d/quit-blocker.conf
+  systemctl restart systemd-resolved 2>/dev/null || true
+}
+
+# ── DNS fallback: /etc/resolv.conf directo ────────────────────────────────────
+activate_dns_resolv() {
+  [ -f /etc/resolv.conf.quit-backup ] || cp /etc/resolv.conf /etc/resolv.conf.quit-backup 2>/dev/null || true
+  printf '# QUIT-BLOCKER\\nnameserver %s\\nnameserver %s\\n' \\
+    "$PRIMARY_DNS" "$SECONDARY_DNS" > /etc/resolv.conf 2>/dev/null || true
+}
+
+deactivate_dns_resolv() {
+  if [ -f /etc/resolv.conf.quit-backup ]; then
+    cp /etc/resolv.conf.quit-backup /etc/resolv.conf 2>/dev/null || true
+    rm -f /etc/resolv.conf.quit-backup
+  fi
+}
+
+activate_dns() {
+  if command -v nmcli &>/dev/null; then
+    activate_dns_nm || activate_dns_resolv
+  elif systemctl is-active systemd-resolved &>/dev/null 2>&1; then
+    activate_dns_resolved
+  else
+    activate_dns_resolv
+  fi
+}
+
+deactivate_dns() {
+  if command -v nmcli &>/dev/null; then
+    deactivate_dns_nm || deactivate_dns_resolv
+  elif [ -f /etc/systemd/resolved.conf.d/quit-blocker.conf ]; then
+    deactivate_dns_resolved
+  else
+    deactivate_dns_resolv
+  fi
+  flush_dns
+}
+
+# ── PAC — GNOME gsettings ─────────────────────────────────────────────────────
+# gsettings precisa de correr como o utilizador original (nao root),
+# com o DBUS_SESSION_BUS_ADDRESS correcto do utilizador.
+activate_pac_gnome() {
+  local real_user real_uid
+  real_user="\${SUDO_USER:-\${PKEXEC_UID:+$(id -nu "$PKEXEC_UID")}}"
+  real_user="\${real_user:-$USER}"
+  real_uid=$(id -u "$real_user" 2>/dev/null || true)
+  [ -z "$real_uid" ] && return 1
+  sudo -u "$real_user" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$real_uid/bus" \\
+    gsettings set org.gnome.system.proxy mode 'auto' 2>/dev/null || true
+  sudo -u "$real_user" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$real_uid/bus" \\
+    gsettings set org.gnome.system.proxy autoconfig-url "$PAC_URL" 2>/dev/null || true
+}
+
+deactivate_pac_gnome() {
+  local real_user real_uid
+  real_user="\${SUDO_USER:-\${PKEXEC_UID:+$(id -nu "$PKEXEC_UID")}}"
+  real_user="\${real_user:-$USER}"
+  real_uid=$(id -u "$real_user" 2>/dev/null || true)
+  [ -z "$real_uid" ] && return 1
+  sudo -u "$real_user" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$real_uid/bus" \\
+    gsettings set org.gnome.system.proxy mode 'none' 2>/dev/null || true
+}
+
+# ── PAC — KDE kwriteconfig5 ───────────────────────────────────────────────────
+activate_pac_kde() {
+  local real_user
+  real_user="\${SUDO_USER:-\${PKEXEC_UID:+$(id -nu "$PKEXEC_UID")}}"
+  real_user="\${real_user:-$USER}"
+  sudo -u "$real_user" kwriteconfig5 --file kioslaverc --group "Proxy Settings" \\
+    --key ProxyType 2 2>/dev/null || true
+  sudo -u "$real_user" kwriteconfig5 --file kioslaverc --group "Proxy Settings" \\
+    --key "Proxy Config Script" "$PAC_URL" 2>/dev/null || true
+}
+
+deactivate_pac_kde() {
+  local real_user
+  real_user="\${SUDO_USER:-\${PKEXEC_UID:+$(id -nu "$PKEXEC_UID")}}"
+  real_user="\${real_user:-$USER}"
+  sudo -u "$real_user" kwriteconfig5 --file kioslaverc --group "Proxy Settings" \\
+    --key ProxyType 0 2>/dev/null || true
+}
+
+activate_pac() {
+  command -v gsettings &>/dev/null && activate_pac_gnome || true
+  command -v kwriteconfig5 &>/dev/null && activate_pac_kde || true
+}
+
+deactivate_pac() {
+  command -v gsettings &>/dev/null && deactivate_pac_gnome || true
+  command -v kwriteconfig5 &>/dev/null && deactivate_pac_kde || true
+}
+
+# ── Apps via chmod a-x ────────────────────────────────────────────────────────
+block_apps() {
+  local app_path pname
+  [ "\${#APP_PATHS[@]}" -eq 0 ] && return 0
+  for app_path in "\${APP_PATHS[@]}"; do
+    [ -f "$app_path" ] || continue
+    chmod a-x "$app_path" 2>/dev/null || true
+    pname=$(basename "$app_path")
+    pkill -x "$pname" 2>/dev/null || true
+  done
+}
+
+unblock_apps() {
+  local app_path
+  [ "\${#APP_PATHS[@]}" -eq 0 ] && return 0
+  for app_path in "\${APP_PATHS[@]}"; do
+    [ -f "$app_path" ] || continue
+    chmod a+x "$app_path" 2>/dev/null || true
+  done
+}
+
+# ── Status ────────────────────────────────────────────────────────────────────
+check_status() {
+  local current_dns pac_mode real_user real_uid
+
+  grep -q "$MARKER_START" "$HOSTS_PATH" 2>/dev/null && HOSTS_ACTIVE=true || true
+
+  if command -v nmcli &>/dev/null; then
+    current_dns=$(nmcli dev show 2>/dev/null | grep -i "IP4.DNS" | head -1 || true)
+  else
+    current_dns=$(cat /etc/resolv.conf 2>/dev/null || true)
+  fi
+  echo "$current_dns" | grep -q "$PRIMARY_DNS" && DNS_ACTIVE=true || true
+
+  if command -v gsettings &>/dev/null; then
+    real_user="\${SUDO_USER:-\${PKEXEC_UID:+$(id -nu "$PKEXEC_UID")}}"
+    real_user="\${real_user:-$USER}"
+    real_uid=$(id -u "$real_user" 2>/dev/null || true)
+    if [ -n "$real_uid" ]; then
+      pac_mode=$(sudo -u "$real_user" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$real_uid/bus" \\
+        gsettings get org.gnome.system.proxy mode 2>/dev/null || true)
+      echo "$pac_mode" | grep -q "auto" && PAC_ACTIVE=true || true
+    fi
+  fi
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+main() {
+  case "\${ACTION}" in
+    activate)   activate_hosts; activate_dns; activate_pac; block_apps ;;
+    deactivate) deactivate_hosts; deactivate_dns; deactivate_pac; unblock_apps ;;
+    status)     check_status ;;
+    *)          OK=false ;;
+  esac
+}
+
+main || { OK=false; }
+
+printf '{"ok":%s,"hostsActive":%s,"dnsActive":%s,"pacActive":%s,"error":""}
+' \\
+  "$OK" "$HOSTS_ACTIVE" "$DNS_ACTIVE" "$PAC_ACTIVE" > "$RESULT_PATH" || true
+`;
+}
+async function runElevatedLinux(action, opts = {}) {
+  const resultPath = getResultPath$1();
+  try {
+    if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
+  } catch {
+  }
+  const scriptPath = getScriptPath();
+  try {
+    fs.writeFileSync(scriptPath, buildScript(opts), "utf-8");
+    fs.chmodSync(scriptPath, 448);
+  } catch (err) {
+    return { ok: false, error: `Failed to write helper script: ${err}` };
+  }
+  const elevMethod = detectElevationMethod();
+  if (elevMethod === "none") {
+    return { ok: false, error: "Nenhum método de elevação disponível (pkexec/gksudo/kdesudo)." };
+  }
+  return new Promise((resolve) => {
+    const proc = elevMethod === "pkexec" ? child_process.spawn("pkexec", ["bash", scriptPath, action]) : child_process.spawn(elevMethod, ["bash", scriptPath, action]);
+    proc.on("close", (code) => {
+      try {
+        if (!fs.existsSync(resultPath)) {
+          resolve({
+            ok: false,
+            error: code !== 0 ? "Operação cancelada pelo utilizador." : "Script falhou silenciosamente."
+          });
+          return;
+        }
+        const raw = fs.readFileSync(resultPath, "utf-8").trim();
+        resolve(JSON.parse(raw));
+      } catch (err) {
+        resolve({ ok: false, error: `Failed to read result: ${err}` });
+      }
+    });
+    proc.on("error", (err) => resolve({ ok: false, error: err.message }));
+  });
+}
+function getScriptPathWin() {
   return path.join(electron.app.getPath("userData"), "quit-blocker-helper.ps1");
 }
 function getResultPath() {
   return path.join(os.tmpdir(), "quit-blocker-result.json");
 }
-function buildScript(opts = {}) {
+function buildWindowsScript(opts = {}) {
   const hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts";
   const allDomains = [...ADULT_DOMAINS, ...opts.extraDomains ?? []];
   const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\r\n");
@@ -1352,18 +1866,18 @@ $json = $result | ConvertTo-Json -Compress
 [System.IO.File]::WriteAllText($ResultPath, $json, [System.Text.Encoding]::UTF8)
 `;
 }
-async function runElevated(action, opts = {}) {
+async function runElevatedWindows(action, opts = {}) {
   const resultPath = getResultPath();
   try {
     if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
   } catch {
   }
+  const scriptPath = getScriptPathWin();
   try {
-    fs.writeFileSync(getScriptPath(), buildScript(opts), "utf-8");
+    fs.writeFileSync(scriptPath, buildWindowsScript(opts), "utf-8");
   } catch (err) {
     return { ok: false, error: `Failed to write helper script: ${err}` };
   }
-  const scriptPath = getScriptPath();
   return new Promise((resolve) => {
     const ps = child_process.spawn("powershell", [
       "-NoProfile",
@@ -1389,6 +1903,16 @@ async function runElevated(action, opts = {}) {
     });
     ps.on("error", (err) => resolve({ ok: false, error: err.message }));
   });
+}
+async function runElevated(action, opts = {}) {
+  switch (process.platform) {
+    case "win32":
+      return runElevatedWindows(action, opts);
+    case "darwin":
+      return runElevatedMac(action, opts);
+    default:
+      return runElevatedLinux(action, opts);
+  }
 }
 let interceptorActive = false;
 function activateRequestInterceptor() {
@@ -1467,6 +1991,21 @@ function getCustomDomains(bl) {
   return domains;
 }
 function getInstalledApps() {
+  try {
+    switch (process.platform) {
+      case "win32":
+        return getInstalledAppsWindows();
+      case "darwin":
+        return getInstalledAppsMac();
+      default:
+        return getInstalledAppsLinux();
+    }
+  } catch (err) {
+    console.error("[customBlocklist] getInstalledApps failed:", err);
+    return [];
+  }
+}
+function getInstalledAppsWindows() {
   const tmpScript = path.join(os.tmpdir(), "quit-list-apps.ps1");
   const tmpResult = path.join(os.tmpdir(), "quit-list-apps.json");
   const script = `
@@ -1482,11 +2021,11 @@ foreach ($p in $paths) {
     ForEach-Object {
       $name = $_.DisplayName.Trim()
 
-      # Tenta DisplayIcon primeiro (remove parâmetros de ícone como ",0")
+      # Tenta DisplayIcon primeiro (remove parametros de icone como ",0")
       $icon = ($_.DisplayIcon -replace '"','').Trim()
       $icon = ($icon -split ',')[0].Trim()
 
-      # Se não for .exe, tenta InstallLocation + nome do exe
+      # Se nao for .exe, tenta InstallLocation + nome do exe
       $exe = ""
       if ($icon -match '\\.exe$' -and (Test-Path $icon)) {
         $exe = $icon
@@ -1511,13 +2050,13 @@ $apps | Sort-Object name -Unique | ConvertTo-Json -Compress | Set-Content -Path 
       { encoding: "utf-8", timeout: 15e3, stdio: ["pipe", "pipe", "ignore"] }
     );
     if (!fs.existsSync(tmpResult)) return [];
-    const raw = fs.readFileSync(tmpResult, "utf-8").trim();
+    const raw = fs.readFileSync(tmpResult, "utf-8").replace(/^\uFEFF/, "").trim();
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     const arr = Array.isArray(parsed) ? parsed : [parsed];
     return arr.filter((a) => a.name && a.exePath).map((a) => ({ name: String(a.name).trim(), exePath: String(a.exePath).trim() })).slice(0, 300);
   } catch (err) {
-    console.error("[customBlocklist] getInstalledApps failed:", err);
+    console.error("[customBlocklist] getInstalledAppsWindows failed:", err);
     return [];
   } finally {
     try {
@@ -1529,6 +2068,129 @@ $apps | Sort-Object name -Unique | ConvertTo-Json -Compress | Set-Content -Path 
     } catch {
     }
   }
+}
+const MAC_EXCLUDE = /* @__PURE__ */ new Set([
+  "Finder",
+  "System Preferences",
+  "SystemPreferences",
+  "App Store",
+  "Activity Monitor",
+  "Terminal",
+  "Console",
+  "Disk Utility",
+  "Migration Assistant",
+  "Keychain Access",
+  "Digital Color Meter",
+  "Screenshot",
+  "Script Editor",
+  "Automator",
+  "ColorSync Utility",
+  "Directory Utility"
+]);
+function getInstalledAppsMac() {
+  const searchDirs = [
+    "/Applications",
+    path.join(os.homedir(), "Applications"),
+    "/System/Applications",
+    "/System/Applications/Utilities"
+  ];
+  const apps = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const dir of searchDirs) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith(".app")) continue;
+      const appName = entry.replace(/\.app$/, "");
+      if (MAC_EXCLUDE.has(appName)) continue;
+      const appPath = path.join(dir, entry);
+      if (seen.has(appPath)) continue;
+      const macOSDir = path.join(appPath, "Contents", "MacOS");
+      let hasExecutable = false;
+      try {
+        const binaries = fs.readdirSync(macOSDir);
+        hasExecutable = binaries.some((b) => {
+          try {
+            const stat = fs.statSync(path.join(macOSDir, b));
+            return stat.isFile() && (stat.mode & 73) !== 0;
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        continue;
+      }
+      if (!hasExecutable) continue;
+      seen.add(appPath);
+      apps.push({ name: appName, exePath: appPath });
+    }
+  }
+  return apps.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 300);
+}
+function getInstalledAppsLinux() {
+  const searchDirs = [
+    "/usr/share/applications",
+    "/usr/local/share/applications",
+    path.join(os.homedir(), ".local", "share", "applications"),
+    "/var/lib/snapd/desktop/applications",
+    // Snap
+    "/var/lib/flatpak/exports/share/applications"
+    // Flatpak
+  ];
+  const apps = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const dir of searchDirs) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith(".desktop")) continue;
+      try {
+        const content = fs.readFileSync(path.join(dir, entry), "utf-8");
+        let name = "";
+        let exec = "";
+        let noDisplay = false;
+        for (const line of content.split("\n")) {
+          if (line.startsWith("Name=") && !name) name = line.slice(5).trim();
+          if (line.startsWith("Exec=") && !exec) exec = line.slice(5).trim();
+          if (line === "NoDisplay=true") noDisplay = true;
+        }
+        if (!name || !exec || noDisplay) continue;
+        exec = exec.replace(/%[fFuUdDnNickvm]/g, "").trim();
+        if (exec.startsWith('"')) {
+          exec = exec.slice(1, exec.indexOf('"', 1));
+        } else {
+          exec = exec.split(/\s+/)[0];
+        }
+        if (!exec) continue;
+        let binaryPath = exec;
+        if (!path.isAbsolute(exec)) {
+          try {
+            binaryPath = child_process.execSync(`which "${exec}" 2>/dev/null`, {
+              encoding: "utf-8",
+              timeout: 2e3
+            }).trim();
+          } catch {
+            binaryPath = exec;
+          }
+        }
+        if (!binaryPath || seen.has(binaryPath)) continue;
+        if (path.isAbsolute(binaryPath) && !fs.existsSync(binaryPath)) continue;
+        seen.add(binaryPath);
+        apps.push({ name, exePath: binaryPath });
+      } catch {
+        continue;
+      }
+    }
+  }
+  return apps.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 300);
 }
 function normalizeDomain(input) {
   try {

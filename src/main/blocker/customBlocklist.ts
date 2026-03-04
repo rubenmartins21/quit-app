@@ -2,6 +2,13 @@
  * customBlocklist — gere as preferências de bloqueio personalizadas do utilizador.
  * Persiste em custom-blocklist.json no userData.
  * Só é limpo quando o desafio termina (deactivateBlocker).
+ *
+ * ALTERAÇÃO cross-platform: getInstalledApps() detecta a plataforma e usa:
+ *   Windows → PowerShell + registo (comportamento original)
+ *   macOS   → lê .app bundles de /Applications e ~/Applications
+ *   Linux   → lê ficheiros .desktop de /usr/share/applications e ~/.local/share
+ *
+ * Todo o resto (interfaces, persistência, domínios, normalizeDomain) é igual.
  */
 
 import { app } from "electron";
@@ -20,7 +27,7 @@ export interface CustomBlocklist {
 
 export interface BlockedApp {
   name: string;       // nome legível (ex: "Discord")
-  exePath: string;    // caminho do .exe (ex: "C:\...\\Discord.exe")
+  exePath: string;    // caminho do executável / .app bundle
 }
 
 export interface InstalledApp {
@@ -102,13 +109,27 @@ export function getCustomDomains(bl: CustomBlocklist): string[] {
   return domains;
 }
 
-// ── Listar apps instaladas (Windows) ─────────────────────────────────────────
+// ── getInstalledApps — entry point cross-platform ─────────────────────────────
 
 export function getInstalledApps(): InstalledApp[] {
+  try {
+    switch (process.platform) {
+      case "win32":  return getInstalledAppsWindows();
+      case "darwin": return getInstalledAppsMac();
+      default:       return getInstalledAppsLinux();
+    }
+  } catch (err) {
+    console.error("[customBlocklist] getInstalledApps failed:", err);
+    return [];
+  }
+}
+
+// ── Windows: PowerShell + registo (comportamento original) ────────────────────
+
+function getInstalledAppsWindows(): InstalledApp[] {
   const tmpScript = path.join(os.tmpdir(), "quit-list-apps.ps1");
   const tmpResult = path.join(os.tmpdir(), "quit-list-apps.json");
 
-  // Script escrito para ficheiro — evita problemas de escape em linha de comando
   const script = `
 $apps = @()
 $paths = @(
@@ -122,11 +143,11 @@ foreach ($p in $paths) {
     ForEach-Object {
       $name = $_.DisplayName.Trim()
 
-      # Tenta DisplayIcon primeiro (remove parâmetros de ícone como ",0")
+      # Tenta DisplayIcon primeiro (remove parametros de icone como ",0")
       $icon = ($_.DisplayIcon -replace '"','').Trim()
       $icon = ($icon -split ',')[0].Trim()
 
-      # Se não for .exe, tenta InstallLocation + nome do exe
+      # Se nao for .exe, tenta InstallLocation + nome do exe
       $exe = ""
       if ($icon -match '\\.exe$' -and (Test-Path $icon)) {
         $exe = $icon
@@ -147,15 +168,13 @@ $apps | Sort-Object name -Unique | ConvertTo-Json -Compress | Set-Content -Path 
 
   try {
     fs.writeFileSync(tmpScript, script, "utf-8");
-
     execSync(
       `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpScript}"`,
-      { encoding: "utf-8", timeout: 15000, stdio: ["pipe", "pipe", "ignore"] }
+      { encoding: "utf-8", timeout: 15000, stdio: ["pipe", "pipe", "ignore"] },
     );
 
     if (!fs.existsSync(tmpResult)) return [];
-
-    const raw = fs.readFileSync(tmpResult, "utf-8").trim();
+    const raw = fs.readFileSync(tmpResult, "utf-8").replace(/^\uFEFF/, "").trim();
     if (!raw) return [];
 
     const parsed = JSON.parse(raw);
@@ -165,12 +184,146 @@ $apps | Sort-Object name -Unique | ConvertTo-Json -Compress | Set-Content -Path 
       .map((a: any) => ({ name: String(a.name).trim(), exePath: String(a.exePath).trim() }))
       .slice(0, 300);
   } catch (err) {
-    console.error("[customBlocklist] getInstalledApps failed:", err);
+    console.error("[customBlocklist] getInstalledAppsWindows failed:", err);
     return [];
   } finally {
     try { fs.unlinkSync(tmpScript); } catch {}
     try { fs.unlinkSync(tmpResult); } catch {}
   }
+}
+
+// ── macOS: .app bundles em /Applications e ~/Applications ────────────────────
+//
+// exePath armazena o caminho do .app bundle (ex: "/Applications/Discord.app").
+// O elevatedHelper.mac.ts usa find_binary() para localizar o executável dentro
+// do bundle (Contents/MacOS/) quando aplica chmod a-x.
+
+const MAC_EXCLUDE = new Set([
+  "Finder", "System Preferences", "SystemPreferences",
+  "App Store", "Activity Monitor", "Terminal", "Console",
+  "Disk Utility", "Migration Assistant", "Keychain Access",
+  "Digital Color Meter", "Screenshot", "Script Editor",
+  "Automator", "ColorSync Utility", "Directory Utility",
+]);
+
+function getInstalledAppsMac(): InstalledApp[] {
+  const searchDirs = [
+    "/Applications",
+    path.join(os.homedir(), "Applications"),
+    "/System/Applications",
+    "/System/Applications/Utilities",
+  ];
+
+  const apps: InstalledApp[] = [];
+  const seen = new Set<string>();
+
+  for (const dir of searchDirs) {
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { continue; }
+
+    for (const entry of entries) {
+      if (!entry.endsWith(".app")) continue;
+      const appName = entry.replace(/\.app$/, "");
+      if (MAC_EXCLUDE.has(appName)) continue;
+
+      const appPath = path.join(dir, entry);
+      if (seen.has(appPath)) continue;
+
+      // Verifica que o bundle tem pelo menos Contents/MacOS/ acessível
+      const macOSDir = path.join(appPath, "Contents", "MacOS");
+      let hasExecutable = false;
+      try {
+        const binaries = fs.readdirSync(macOSDir);
+        hasExecutable = binaries.some(b => {
+          try {
+            const stat = fs.statSync(path.join(macOSDir, b));
+            return stat.isFile() && (stat.mode & 0o111) !== 0;
+          } catch { return false; }
+        });
+      } catch { continue; }
+
+      if (!hasExecutable) continue;
+
+      seen.add(appPath);
+      apps.push({ name: appName, exePath: appPath });
+    }
+  }
+
+  return apps.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 300);
+}
+
+// ── Linux: ficheiros .desktop de /usr/share/applications e ~/.local/share ────
+//
+// exePath armazena o path absoluto do binário (resolvido via which se relativo).
+// O elevatedHelper.linux.ts aplica chmod a-x directamente neste path.
+
+function getInstalledAppsLinux(): InstalledApp[] {
+  const searchDirs = [
+    "/usr/share/applications",
+    "/usr/local/share/applications",
+    path.join(os.homedir(), ".local", "share", "applications"),
+    "/var/lib/snapd/desktop/applications",        // Snap
+    "/var/lib/flatpak/exports/share/applications", // Flatpak
+  ];
+
+  const apps: InstalledApp[] = [];
+  const seen = new Set<string>();
+
+  for (const dir of searchDirs) {
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { continue; }
+
+    for (const entry of entries) {
+      if (!entry.endsWith(".desktop")) continue;
+
+      try {
+        const content = fs.readFileSync(path.join(dir, entry), "utf-8");
+        let name = "";
+        let exec = "";
+        let noDisplay = false;
+
+        for (const line of content.split("\n")) {
+          if (line.startsWith("Name=") && !name)       name      = line.slice(5).trim();
+          if (line.startsWith("Exec=") && !exec)       exec      = line.slice(5).trim();
+          if (line === "NoDisplay=true")                noDisplay = true;
+        }
+
+        if (!name || !exec || noDisplay) continue;
+
+        // Remove flags Exec= como %f %u %F %U e aspas extra
+        exec = exec.replace(/%[fFuUdDnNickvm]/g, "").trim();
+        if (exec.startsWith('"')) {
+          exec = exec.slice(1, exec.indexOf('"', 1));
+        } else {
+          exec = exec.split(/\s+/)[0];
+        }
+        if (!exec) continue;
+
+        // Resolve path absoluto se for relativo
+        let binaryPath = exec;
+        if (!path.isAbsolute(exec)) {
+          try {
+            binaryPath = execSync(`which "${exec}" 2>/dev/null`, {
+              encoding: "utf-8", timeout: 2000,
+            }).trim();
+          } catch {
+            binaryPath = exec;
+          }
+        }
+
+        if (!binaryPath || seen.has(binaryPath)) continue;
+        // Só adiciona se o binário existir (ignora entradas quebradas)
+        if (path.isAbsolute(binaryPath) && !fs.existsSync(binaryPath)) continue;
+
+        seen.add(binaryPath);
+        apps.push({ name, exePath: binaryPath });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return apps.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 300);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

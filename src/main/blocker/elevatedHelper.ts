@@ -1,3 +1,18 @@
+/**
+ * elevatedHelper.ts — entry point cross-platform do sistema de bloqueio.
+ *
+ * Detecta a plataforma e delega para o helper específico:
+ *   win32   → PowerShell via Start-Process -Verb RunAs (UAC dialog)
+ *   darwin  → bash via osascript "with administrator privileges" (password dialog)
+ *   linux   → bash via pkexec (polkit GUI) / gksudo / kdesudo
+ *
+ * Interface pública única: runElevated(action, opts)
+ * Todas as plataformas implementam a mesma lógica funcional:
+ *   activate   → hosts file + DNS + PAC + apps block
+ *   deactivate → reverter tudo
+ *   status     → verificar estado actual
+ */
+
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -13,6 +28,10 @@ import {
   HOSTS_MARKER_END,
 } from "./blocklist.js";
 import { PAC_URL } from "./pacServer.js";
+import { runElevatedMac }   from "./elevatedHelper.mac.js";
+import { runElevatedLinux } from "./elevatedHelper.linux.js";
+
+// ── Tipos exportados (usados pelos outros módulos) ────────────────────────────
 
 export type BlockerAction = "activate" | "deactivate" | "status";
 
@@ -26,21 +45,24 @@ export interface HelperResult {
 
 export interface ElevatedOptions {
   extraDomains?: string[];  // Reddit, Twitter, URLs custom
-  blockedApps?: string[];   // paths de .exe a bloquear via IFEO
+  blockedApps?: string[];   // paths de executáveis a bloquear
 }
 
-function getScriptPath(): string {
+// ── Windows ───────────────────────────────────────────────────────────────────
+
+function getScriptPathWin(): string {
   return path.join(app.getPath("userData"), "quit-blocker-helper.ps1");
 }
+
 function getResultPath(): string {
   return path.join(os.tmpdir(), "quit-blocker-result.json");
 }
 
-function buildScript(opts: ElevatedOptions = {}): string {
-  const hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts";
-  const allDomains = [...ADULT_DOMAINS, ...(opts.extraDomains ?? [])];
-  const domainLines = allDomains.map(d => `0.0.0.0 ${d}`).join("\r\n");
-  const pacUrl = PAC_URL;
+function buildWindowsScript(opts: ElevatedOptions = {}): string {
+  const hostsPath    = "C:\\Windows\\System32\\drivers\\etc\\hosts";
+  const allDomains   = [...ADULT_DOMAINS, ...(opts.extraDomains ?? [])];
+  const domainLines  = allDomains.map(d => `0.0.0.0 ${d}`).join("\r\n");
+  const pacUrl       = PAC_URL;
   const appPathsJson = JSON.stringify(opts.blockedApps ?? []);
 
   return `param([string]$Action, [string]$ResultPath)
@@ -224,17 +246,19 @@ $json = $result | ConvertTo-Json -Compress
 `;
 }
 
-export async function runElevated(action: BlockerAction, opts: ElevatedOptions = {}): Promise<HelperResult> {
+async function runElevatedWindows(
+  action: BlockerAction,
+  opts: ElevatedOptions = {},
+): Promise<HelperResult> {
   const resultPath = getResultPath();
   try { if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath); } catch {}
 
+  const scriptPath = getScriptPathWin();
   try {
-    fs.writeFileSync(getScriptPath(), buildScript(opts), "utf-8");
+    fs.writeFileSync(scriptPath, buildWindowsScript(opts), "utf-8");
   } catch (err) {
     return { ok: false, error: `Failed to write helper script: ${err}` };
   }
-
-  const scriptPath = getScriptPath();
 
   return new Promise((resolve) => {
     const ps = spawn("powershell", [
@@ -255,6 +279,7 @@ export async function runElevated(action: BlockerAction, opts: ElevatedOptions =
           });
           return;
         }
+        // Strip UTF-8 BOM (PowerShell 5 pode adicionar) e parse
         const raw = fs.readFileSync(resultPath, "utf-8").replace(/^\uFEFF/, "").trim();
         resolve(JSON.parse(raw) as HelperResult);
       } catch (err) {
@@ -264,4 +289,21 @@ export async function runElevated(action: BlockerAction, opts: ElevatedOptions =
 
     ps.on("error", (err) => resolve({ ok: false, error: err.message }));
   });
+}
+
+// ── Entry point público ───────────────────────────────────────────────────────
+
+/**
+ * Executa uma acção de bloqueio com elevação de privilégios.
+ * Detecta automaticamente a plataforma e usa o helper adequado.
+ */
+export async function runElevated(
+  action: BlockerAction,
+  opts: ElevatedOptions = {},
+): Promise<HelperResult> {
+  switch (process.platform) {
+    case "win32":  return runElevatedWindows(action, opts);
+    case "darwin": return runElevatedMac(action, opts);
+    default:       return runElevatedLinux(action, opts);  // linux, freebsd, etc.
+  }
 }
