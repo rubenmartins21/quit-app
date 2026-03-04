@@ -28,12 +28,52 @@ const STATUS_BG: Record<StatusKey, string> = {
 };
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("pt-PT", { day: "numeric", month: "short", year: "numeric" });
+  return new Date(iso).toLocaleDateString("pt-PT", {
+    day: "numeric", month: "short", year: "numeric",
+  });
 }
 
-function DetailPanel({ challenge, onClose }: { challenge: ChallengeData; onClose: () => void }) {
-  const status = challenge.status as StatusKey;
-  const endDate = challenge.completedAt ?? challenge.cancelledAt ?? challenge.endsAt;
+// ── Best streak helpers ────────────────────────────────────────────────────────
+
+/**
+ * Returns the true days elapsed, frozen at the moment the challenge ended.
+ * The backend's daysElapsed is calculated from `now - startedAt`, so a
+ * challenge cancelled on day 1 that started 8 days ago incorrectly shows 8.
+ * We recalculate using cancelledAt / completedAt as the end boundary.
+ */
+function frozenDays(c: ChallengeData): number {
+  const start = new Date(c.startedAt).getTime();
+  const endIso = c.cancelledAt ?? c.completedAt ?? null;
+  // Active challenges: use live elapsed from backend
+  if (!endIso) return c.progress.daysElapsed;
+  const end = new Date(endIso).getTime();
+  return Math.min(
+    c.durationDays,
+    Math.max(0, Math.floor((end - start) / 86_400_000)),
+  );
+}
+
+function getBestStreak(challenges: ChallengeData[]): number {
+  if (challenges.length === 0) return 0;
+  return Math.max(...challenges.map(c => frozenDays(c)));
+}
+
+function isBestStreak(challenge: ChallengeData, best: number): boolean {
+  return best > 0 && frozenDays(challenge) === best;
+}
+
+// ── Detail panel ──────────────────────────────────────────────────────────────
+
+function DetailPanel({
+  challenge,
+  isBest,
+  onClose,
+}: {
+  challenge: ChallengeData;
+  isBest: boolean;
+  onClose: () => void;
+}) {
+  const status  = challenge.status as StatusKey;
 
   return (
     <div style={panelStyles.overlay} onClick={onClose}>
@@ -41,31 +81,69 @@ function DetailPanel({ challenge, onClose }: { challenge: ChallengeData; onClose
 
         {/* Header */}
         <div style={panelStyles.header}>
-          <div>
-            <span style={{ ...panelStyles.badge, color: STATUS_COLOR[status], background: STATUS_BG[status] }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{
+              ...panelStyles.badge,
+              color: STATUS_COLOR[status],
+              background: STATUS_BG[status],
+            }}>
               {STATUS_LABEL[status]}
             </span>
+            {isBest && (
+              <span style={panelStyles.bestBadge}>
+                melhor streak
+              </span>
+            )}
           </div>
           <button onClick={onClose} style={panelStyles.closeBtn}>✕</button>
         </div>
 
         {/* Big number */}
         <div style={panelStyles.bigNum}>
-          <span style={panelStyles.bigNumValue}>{challenge.progress.daysElapsed}</span>
-          <span style={panelStyles.bigNumLabel}>dias completados de {challenge.durationDays}</span>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
+            <span style={{
+              ...panelStyles.bigNumValue,
+              color: isBest ? "var(--green)" : "var(--gray-800)",
+            }}>
+              {frozenDays(challenge)}
+            </span>
+            {isBest && (
+              <span style={{ fontSize: "20px", lineHeight: 1 }}>🏆</span>
+            )}
+          </div>
+          <span style={panelStyles.bigNumLabel}>
+            dias completados de {challenge.durationDays}
+          </span>
         </div>
 
         {/* Progress bar */}
-        <div style={{ height: "3px", background: "var(--gray-200)", borderRadius: "99px", overflow: "hidden", marginBottom: "28px" }}>
-          <div style={{ height: "100%", width: `${Math.min(challenge.progress.percentage, 100)}%`, background: STATUS_COLOR[status], borderRadius: "99px" }} />
+        <div style={{
+          height: "3px",
+          background: "var(--gray-200)",
+          borderRadius: "99px",
+          overflow: "hidden",
+          marginBottom: "28px",
+        }}>
+          <div style={{
+            height: "100%",
+            width: `${Math.min(challenge.progress.percentage, 100)}%`,
+            background: isBest ? "var(--green)" : STATUS_COLOR[status],
+            borderRadius: "99px",
+          }} />
         </div>
 
         {/* Details */}
         <div style={panelStyles.details}>
-          <DetailRow label="Início" value={formatDate(challenge.startedAt)} />
-          <DetailRow label="Fim" value={formatDate(endDate)} />
+          <DetailRow label="Início"           value={formatDate(challenge.startedAt)} />
+          <DetailRow label="Fim previsto"      value={formatDate(challenge.endsAt)} />
+          {challenge.completedAt && (
+            <DetailRow label="Completado em" value={formatDate(challenge.completedAt)} highlight="green" />
+          )}
+          {challenge.cancelledAt && (
+            <DetailRow label="Recaída em" value={formatDate(challenge.cancelledAt)} highlight="red" />
+          )}
           <DetailRow label="Duração definida" value={`${challenge.durationDays} dias`} />
-          <DetailRow label="Dias aguentou" value={`${challenge.progress.daysElapsed} dias`} />
+          <DetailRow label="Dias aguentou"    value={`${frozenDays(challenge)} dias`} />
         </div>
 
         <div style={panelStyles.divider} />
@@ -91,36 +169,63 @@ function DetailPanel({ challenge, onClose }: { challenge: ChallengeData; onClose
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function DetailRow({ label, value, highlight }: {
+  label: string;
+  value: string;
+  highlight?: "green" | "red";
+}) {
+  const valueColor = highlight === "green"
+    ? "var(--green)"
+    : highlight === "red"
+      ? "var(--red-muted)"
+      : "var(--gray-800)";
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--gray-200)" }}>
+    <div style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "10px 0", borderBottom: "1px solid var(--gray-200)",
+    }}>
       <span style={{ fontSize: "11px", color: "var(--gray-400)", letterSpacing: "0.05em" }}>{label}</span>
-      <span style={{ fontSize: "12px", color: "var(--gray-800)" }}>{value}</span>
+      <span style={{ fontSize: "12px", color: valueColor }}>{value}</span>
     </div>
   );
 }
 
+// ── Main screen ───────────────────────────────────────────────────────────────
+
 export function HistoryScreen({ onNavigate }: Props) {
   const [challenges, setChallenges] = useState<ChallengeData[] | null>(null);
-  const [selected, setSelected] = useState<ChallengeData | null>(null);
+  const [selected, setSelected]     = useState<ChallengeData | null>(null);
 
   useEffect(() => {
     ipc.challenge.history().then(res => {
-      // Filter out active challenges — history is only past ones
       const past = (res.challenges ?? []).filter(c => c.status !== "active");
       setChallenges(past);
     });
   }, []);
 
+  const best = challenges ? getBestStreak(challenges) : 0;
+  const bestChallenge = challenges?.find(c => isBestStreak(c, best)) ?? null;
+
   return (
     <div style={{ height: "100vh", display: "flex", background: "var(--white)", overflow: "hidden" }}>
-      <div className="drag-region" style={{ position: "absolute", top: 0, left: 0, right: 0, height: "28px", zIndex: 10 }} />
+      <div className="drag-region" style={{
+        position: "absolute", top: 0, left: 0, right: 0, height: "28px", zIndex: 10,
+      }} />
 
       <Sidebar active="history" onNavigate={onNavigate} />
 
-      {selected && <DetailPanel challenge={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <DetailPanel
+          challenge={selected}
+          isBest={isBestStreak(selected, best)}
+          onClose={() => setSelected(null)}
+        />
+      )}
 
-      <main style={{ flex: 1, padding: "52px 56px 40px", display: "flex", flexDirection: "column", overflowY: "auto" }}>
+      <main style={{
+        flex: 1, padding: "52px 56px 40px",
+        display: "flex", flexDirection: "column", overflowY: "auto",
+      }}>
         <p style={eyebrow}>Histórico</p>
         <h1 style={headline}>Desafios anteriores.</h1>
 
@@ -136,26 +241,60 @@ export function HistoryScreen({ onNavigate }: Props) {
             </p>
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", maxWidth: "560px" }}>
-            {challenges.map((c, i) => (
-              <ChallengeRow
-                key={c.id}
-                challenge={c}
-                isLast={i === challenges.length - 1}
-                onClick={() => setSelected(c)}
-              />
-            ))}
-          </div>
+          <>
+            {/* Best streak summary card */}
+            {best > 0 && (
+              <div
+                style={{ ...bestCard, cursor: bestChallenge ? "pointer" : "default" }}
+                onClick={() => bestChallenge && setSelected(bestChallenge)}
+              >
+                <div>
+                  <p style={bestCardLabel}>Melhor streak</p>
+                  <p style={bestCardDays}>
+                    {best} dia{best !== 1 ? "s" : ""}
+                  </p>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span style={{ fontSize: "28px", lineHeight: 1 }}>🏆</span>
+                  {bestChallenge && (
+                    <span style={{ fontSize: "12px", color: "var(--green)", opacity: 0.6 }}>→</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", flexDirection: "column", maxWidth: "560px" }}>
+              {challenges.map((c, i) => (
+                <ChallengeRow
+                  key={c.id}
+                  challenge={c}
+                  isBest={isBestStreak(c, best)}
+                  isLast={i === challenges.length - 1}
+                  onClick={() => setSelected(c)}
+                />
+              ))}
+            </div>
+          </>
         )}
       </main>
     </div>
   );
 }
 
-function ChallengeRow({ challenge, isLast, onClick }: {
-  challenge: ChallengeData; isLast: boolean; onClick: () => void;
+// ── List row ──────────────────────────────────────────────────────────────────
+
+function ChallengeRow({
+  challenge,
+  isBest,
+  isLast,
+  onClick,
+}: {
+  challenge: ChallengeData;
+  isBest: boolean;
+  isLast: boolean;
+  onClick: () => void;
 }) {
-  const status = challenge.status as StatusKey;
+  const status  = challenge.status as StatusKey;
   const endDate = challenge.completedAt ?? challenge.cancelledAt ?? challenge.endsAt;
 
   return (
@@ -172,9 +311,9 @@ function ChallengeRow({ challenge, isLast, onClick }: {
       onMouseLeave={e => (e.currentTarget.style.opacity = "1")}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span style={{ fontSize: "14px", color: "var(--gray-800)" }}>
-            {challenge.progress.daysElapsed} / {challenge.durationDays} dias
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ fontSize: "14px", color: isBest ? "var(--green)" : "var(--gray-800)", fontWeight: isBest ? 500 : 400 }}>
+            {frozenDays(challenge)} / {challenge.durationDays} dias
           </span>
           <span style={{
             fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase",
@@ -183,6 +322,9 @@ function ChallengeRow({ challenge, isLast, onClick }: {
           }}>
             {STATUS_LABEL[status]}
           </span>
+          {isBest && (
+            <span style={{ fontSize: "13px", lineHeight: 1 }} title="Melhor streak">🏆</span>
+          )}
         </div>
         <span style={{ fontSize: "11px", color: "var(--gray-400)" }}>
           {formatDate(challenge.startedAt)} → {formatDate(endDate)}
@@ -193,8 +335,36 @@ function ChallengeRow({ challenge, isLast, onClick }: {
   );
 }
 
-const eyebrow: React.CSSProperties = { fontSize: "10px", letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--gray-400)", marginBottom: "6px" };
-const headline: React.CSSProperties = { fontFamily: "var(--serif)", fontSize: "32px", color: "var(--gray-800)", fontWeight: 400, lineHeight: 1.1 };
+// ── Styles ────────────────────────────────────────────────────────────────────
+
+const eyebrow: React.CSSProperties = {
+  fontSize: "10px", letterSpacing: "0.2em",
+  textTransform: "uppercase", color: "var(--gray-400)", marginBottom: "6px",
+};
+const headline: React.CSSProperties = {
+  fontFamily: "var(--serif)", fontSize: "32px",
+  color: "var(--gray-800)", fontWeight: 400, lineHeight: 1.1,
+};
+
+// Best streak summary card (above the list)
+const bestCard: React.CSSProperties = {
+  display: "flex", justifyContent: "space-between", alignItems: "center",
+  padding: "16px 20px",
+  background: "var(--green-subtle)",
+  border: "1px solid var(--green)",
+  borderRadius: "var(--radius-md)",
+  marginBottom: "24px",
+  maxWidth: "560px",
+};
+const bestCardLabel: React.CSSProperties = {
+  fontSize: "10px", letterSpacing: "0.18em",
+  textTransform: "uppercase", color: "var(--green)",
+  marginBottom: "4px",
+};
+const bestCardDays: React.CSSProperties = {
+  fontFamily: "var(--serif)", fontSize: "28px",
+  color: "var(--green)", lineHeight: 1,
+};
 
 const panelStyles: Record<string, React.CSSProperties> = {
   overlay: {
@@ -219,6 +389,12 @@ const panelStyles: Record<string, React.CSSProperties> = {
     fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase",
     padding: "4px 10px", borderRadius: "99px",
   },
+  bestBadge: {
+    fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase",
+    padding: "4px 10px", borderRadius: "99px",
+    color: "var(--green)", background: "var(--green-subtle)",
+    border: "1px solid var(--green)",
+  },
   closeBtn: {
     background: "none", border: "none", fontSize: "14px",
     color: "var(--gray-400)", cursor: "pointer", padding: "4px",
@@ -227,12 +403,11 @@ const panelStyles: Record<string, React.CSSProperties> = {
     display: "flex", flexDirection: "column", gap: "4px", marginBottom: "16px",
   },
   bigNumValue: {
-    fontFamily: "var(--serif)", fontSize: "48px", color: "var(--gray-800)",
+    fontFamily: "var(--serif)", fontSize: "48px",
     lineHeight: 1,
   },
   bigNumLabel: {
-    fontSize: "11px", color: "var(--gray-400)",
-    letterSpacing: "0.05em",
+    fontSize: "11px", color: "var(--gray-400)", letterSpacing: "0.05em",
   },
   details: { marginBottom: "24px" },
   divider: { height: "1px", background: "var(--gray-200)", margin: "24px 0" },
