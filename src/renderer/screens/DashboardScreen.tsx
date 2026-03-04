@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { ipc, ChallengeData, BlockerStatus } from "../lib/ipc";
 import { Button } from "../components/ui";
 import { Sidebar } from "../components/Sidebar";
@@ -35,6 +35,139 @@ function ProgressBar({ percentage }: { percentage: number }) {
   );
 }
 
+// ── Elapsed time helpers ───────────────────────────────────────────────────────
+
+interface ElapsedResult {
+  lessThanOneDay: boolean;
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+}
+
+function computeElapsed(startedAt: string): ElapsedResult {
+  const totalSeconds = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000),
+  );
+  const days    = Math.floor(totalSeconds / 86400);
+  const hours   = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return { lessThanOneDay: days < 1, days, hours, minutes, seconds };
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+// ── Live counter — ticks every second when < 1 day, every minute after ────────
+
+function useLiveElapsed(startedAt: string | undefined): ElapsedResult | null {
+  const [elapsed, setElapsed] = useState<ElapsedResult | null>(
+    startedAt ? computeElapsed(startedAt) : null,
+  );
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!startedAt) { setElapsed(null); return; }
+
+    function tick() {
+      const e = computeElapsed(startedAt!);
+      setElapsed(e);
+      // Tick every second while sub-day, every 60 s after
+      timerRef.current = setTimeout(tick, e.lessThanOneDay ? 1000 : 60_000);
+    }
+
+    tick();
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [startedAt]);
+
+  return elapsed;
+}
+
+// ── Big display: adapts between sub-day (h:mm:ss) and multi-day ───────────────
+
+function ElapsedDisplay({
+  elapsed,
+  dimmed,
+}: {
+  elapsed: ElapsedResult;
+  dimmed: boolean;
+}) {
+  const color = dimmed ? "var(--gray-400)" : "var(--gray-800)";
+
+  if (elapsed.lessThanOneDay) {
+    // Format: "h:mm:ss" if hours > 0, otherwise "mm:ss"
+    const timeStr = elapsed.hours > 0
+      ? `${elapsed.hours}:${pad(elapsed.minutes)}:${pad(elapsed.seconds)}`
+      : `${elapsed.minutes}:${pad(elapsed.seconds)}`;
+
+    const unitLabel = elapsed.hours > 0 ? "h : min : s" : "min : s";
+
+    return (
+      <>
+        <h1
+          style={{
+            fontFamily: "var(--serif)",
+            fontSize: "56px",
+            fontWeight: 400,
+            lineHeight: 1,
+            marginBottom: "4px",
+            color,
+            transition: "color 0.3s",
+            letterSpacing: "-0.02em",
+          }}
+        >
+          {timeStr}
+        </h1>
+        <p
+          style={{
+            fontSize: "12px",
+            color: "var(--gray-400)",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            marginBottom: "6px",
+          }}
+        >
+          {unitLabel} — primeiro dia
+        </p>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <h1
+        style={{
+          fontFamily: "var(--serif)",
+          fontSize: "56px",
+          fontWeight: 400,
+          lineHeight: 1,
+          marginBottom: "4px",
+          color,
+          transition: "color 0.3s",
+        }}
+      >
+        {elapsed.days}
+      </h1>
+      <p
+        style={{
+          fontSize: "12px",
+          color: "var(--gray-400)",
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          marginBottom: "6px",
+        }}
+      >
+        dias consecutivos
+      </p>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const dailyMessages = [
   "Impulsos são temporários.",
   "Hoje estás no controlo.",
@@ -45,16 +178,15 @@ const dailyMessages = [
 
 export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
   const [loggingOut, setLoggingOut] = useState(false);
-  const [challenge, setChallenge] = useState<ChallengeData | null | undefined>(
-    undefined,
-  );
-  const [blockerStatus, setBlockerStatus] = useState<BlockerStatus | null>(
-    null,
-  );
+  const [challenge, setChallenge] = useState<ChallengeData | null | undefined>(undefined);
+  const [blockerStatus, setBlockerStatus] = useState<BlockerStatus | null>(null);
   const [showQuitFlow, setShowQuitFlow] = useState(false);
   const [cancellingQuit, setCancellingQuit] = useState(false);
 
   const blockerActive = blockerStatus?.active ?? false;
+
+  // startedAt drives the live counter — only set once challenge loads
+  const elapsed = useLiveElapsed(challenge?.startedAt);
 
   useEffect(() => {
     ipc.challenge.active().then((res) => setChallenge(res.challenge ?? null));
@@ -133,32 +265,9 @@ export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
             : "Sessão ativa"}
         </p>
 
-        {challenge ? (
+        {challenge && elapsed ? (
           <>
-            <h1
-              style={{
-                fontFamily: "var(--serif)",
-                fontSize: "56px",
-                fontWeight: 400,
-                lineHeight: 1,
-                marginBottom: "4px",
-                color: hasPendingQuit ? "var(--gray-400)" : "var(--gray-800)",
-                transition: "color 0.3s",
-              }}
-            >
-              {challenge.progress.daysElapsed}
-            </h1>
-            <p
-              style={{
-                fontSize: "12px",
-                color: "var(--gray-400)",
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                marginBottom: "6px",
-              }}
-            >
-              dias consecutivos
-            </p>
+            <ElapsedDisplay elapsed={elapsed} dimmed={hasPendingQuit} />
             <p
               style={{
                 fontSize: "13px",
@@ -169,6 +278,25 @@ export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
               {hasPendingQuit
                 ? `Desistência registada. Desbloqueio em ${qr!.hoursRemaining}h.`
                 : todayMsg}
+            </p>
+          </>
+        ) : challenge ? (
+          // Challenge loaded but elapsed not yet initialised (should be instant)
+          <>
+            <h1
+              style={{
+                fontFamily: "var(--serif)",
+                fontSize: "56px",
+                fontWeight: 400,
+                lineHeight: 1,
+                marginBottom: "4px",
+                color: "var(--gray-200)",
+              }}
+            >
+              —
+            </h1>
+            <p style={{ fontSize: "12px", color: "var(--gray-400)", marginBottom: "28px" }}>
+              A calcular...
             </p>
           </>
         ) : (
