@@ -10,6 +10,7 @@ interface Props {
 }
 
 const PRESET_DAYS = [7, 30, 90];
+const REASON_MIN = 10;
 
 export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
   const [hasActive, setHasActive] = useState<boolean | null>(null);
@@ -17,6 +18,9 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
   const [customDays, setCustomDays] = useState("");
   const [useCustom, setUseCustom] = useState(false);
   const [reason, setReason] = useState("");
+  // Track whether the user has ever touched the reason field — only show
+  // the hint after they've interacted, not from the moment the page loads.
+  const [reasonTouched, setReasonTouched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -70,16 +74,27 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
     a.name.toLowerCase().includes(appSearch.toLowerCase())
   );
 
+  // ── Validation ─────────────────────────────────────────────────────────────
+
+  const daysValid   = !!effectiveDays && !isNaN(effectiveDays) && effectiveDays >= 7;
+  const reasonValid = reason.trim().length >= REASON_MIN;
+  const canSubmit   = daysValid && reasonValid;
+
+  // Hint: how many characters are still needed
+  const reasonMissing = Math.max(0, REASON_MIN - reason.trim().length);
+  const showReasonHint = reasonTouched && !reasonValid;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (!effectiveDays || isNaN(effectiveDays)) { setError("Escolhe uma duração."); return; }
-    if (effectiveDays < 7) { setError("Mínimo de 7 dias."); return; }
-    if (reason.trim().length < 10) { setError("Escreve pelo menos 10 caracteres no motivo."); return; }
+    // Mark touched so hints appear if user somehow bypasses blur
+    setReasonTouched(true);
+    if (!daysValid)   { setError("Escolhe uma duração válida (mínimo 7 dias)."); return; }
+    if (!reasonValid) { setError(`O motivo precisa de pelo menos ${REASON_MIN} caracteres.`); return; }
 
     setLoading(true);
     const res = await ipc.challenge.create({
-      durationDays: effectiveDays,
+      durationDays: effectiveDays!,
       reason: reason.trim(),
       blockReddit,
       blockTwitter,
@@ -90,8 +105,6 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
     if (res.error) { setError(res.error); return; }
     if (res.ok && res.challenge) onCreated(res.challenge);
   }
-
-  const canSubmit = !!effectiveDays && effectiveDays >= 7 && reason.trim().length >= 10;
 
   if (hasActive === null) {
     return (
@@ -137,30 +150,79 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
             <label style={fieldLabel}>Duração</label>
             <div style={{ display: "flex", gap: "8px" }}>
               {PRESET_DAYS.map((d) => (
-                <button key={d} type="button" onClick={() => { setSelectedDays(d); setUseCustom(false); setCustomDays(""); setError(""); }}
-                  style={{ ...presetBtn, color: selectedDays === d && !useCustom ? "var(--green)" : "var(--gray-600)", borderColor: selectedDays === d && !useCustom ? "var(--green)" : "var(--gray-200)", background: selectedDays === d && !useCustom ? "var(--green-subtle)" : "transparent" }}>
+                <button key={d} type="button"
+                  onClick={() => { setSelectedDays(d); setUseCustom(false); setCustomDays(""); setError(""); }}
+                  style={{
+                    ...presetBtn,
+                    color:       selectedDays === d && !useCustom ? "var(--green)"        : "var(--gray-600)",
+                    borderColor: selectedDays === d && !useCustom ? "var(--green)"        : "var(--gray-200)",
+                    background:  selectedDays === d && !useCustom ? "var(--green-subtle)" : "transparent",
+                  }}>
                   {d} dias
                 </button>
               ))}
             </div>
-            <Input id="custom-days" type="text" inputMode="numeric" placeholder="Personalizado (mín. 7 dias)" value={customDays}
-              onChange={e => { const v = e.target.value.replace(/\D/g, ""); setCustomDays(v); setUseCustom(true); setSelectedDays(null); setError(""); }}
+            <Input id="custom-days" type="text" inputMode="numeric"
+              placeholder="Personalizado (mín. 7 dias)" value={customDays}
+              onChange={e => {
+                const v = e.target.value.replace(/\D/g, "");
+                setCustomDays(v); setUseCustom(true); setSelectedDays(null); setError("");
+              }}
               style={{ borderColor: useCustom ? "var(--green)" : "var(--gray-200)" }} />
             {useCustom && customDays && parseInt(customDays) < 7 && (
-              <p style={{ fontSize: "11px", color: "var(--red-muted)" }}>Mínimo de 7 dias.</p>
+              <p style={hintError}>Mínimo de 7 dias.</p>
             )}
           </div>
 
           {/* ── Motivo ── */}
           <div style={fieldGroup}>
-            <label style={fieldLabel}>Estou a fazer isto porque…</label>
-            <textarea value={reason} onChange={e => setReason(e.target.value)}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <label style={fieldLabel}>Estou a fazer isto porque…</label>
+              {/* Live character counter — shows remaining when below min, total when above */}
+              <span style={{
+                fontSize: "10px",
+                color: showReasonHint ? "var(--red-muted)" : reason.trim().length >= REASON_MIN ? "var(--green)" : "var(--gray-400)",
+                transition: "color 0.2s",
+              }}>
+                {reason.trim().length < REASON_MIN
+                  ? `ainda faltam ${reasonMissing} caract${reasonMissing === 1 ? "ere" : "eres"}`
+                  : `${reason.length}/500`}
+              </span>
+            </div>
+            <textarea
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+              onBlur={() => setReasonTouched(true)}
               placeholder="Escreve o teu motivo. Vais rever isto se tentares desistir."
-              rows={4} maxLength={500}
-              style={textareaStyle}
-              onFocus={e => e.currentTarget.style.borderColor = "var(--green)"}
-              onBlur={e => e.currentTarget.style.borderColor = "var(--gray-200)"} />
-            <p style={{ fontSize: "10px", color: "var(--gray-400)", textAlign: "right" }}>{reason.length}/500</p>
+              rows={4}
+              maxLength={500}
+              style={{
+                ...textareaStyle,
+                borderColor: showReasonHint
+                  ? "var(--red-muted)"
+                  : reason.trim().length >= REASON_MIN
+                    ? "var(--green)"
+                    : "var(--gray-200)",
+              }}
+              onFocus={e => {
+                if (!showReasonHint && reason.trim().length < REASON_MIN)
+                  e.currentTarget.style.borderColor = "var(--gray-400)";
+              }}
+              onBlur={e => {
+                setReasonTouched(true);
+                e.currentTarget.style.borderColor = showReasonHint
+                  ? "var(--red-muted)"
+                  : reason.trim().length >= REASON_MIN
+                    ? "var(--green)"
+                    : "var(--gray-200)";
+              }}
+            />
+            {/* Inline hint — appears after first blur if still too short */}
+            {showReasonHint && (
+              <p style={hintError}>
+                Escreve um pouco mais — pelo menos {REASON_MIN} caracteres.
+              </p>
+            )}
           </div>
 
           {/* ── Bloqueios ── */}
@@ -170,7 +232,6 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
               Estes bloqueios são aplicados ao sistema inteiro — browser, apps, tudo. Só são removidos quando o desafio terminar.
             </p>
 
-            {/* Reddit + Twitter toggles */}
             <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
               <ToggleRow
                 label="Reddit"
@@ -186,7 +247,6 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
               />
             </div>
 
-            {/* Apps instaladas */}
             <div style={{ marginBottom: "16px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                 <span style={{ fontSize: "11px", color: "var(--gray-600)" }}>Apps instaladas</span>
@@ -195,27 +255,24 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
                   {loadingApps ? "A carregar..." : "Seleccionar apps"}
                 </button>
               </div>
-
               {blockedApps.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
                   {blockedApps.map(app => (
-                    <AppTag key={app.exePath} name={app.name} onRemove={() => setBlockedApps(p => p.filter(a => a.exePath !== app.exePath))} />
+                    <AppTag key={app.exePath} name={app.name}
+                      onRemove={() => setBlockedApps(p => p.filter(a => a.exePath !== app.exePath))} />
                   ))}
                 </div>
               )}
             </div>
 
-            {/* URLs custom */}
             <div>
               <span style={{ fontSize: "11px", color: "var(--gray-600)", display: "block", marginBottom: "8px" }}>URLs / domínios adicionais</span>
               <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
                 <input
-                  type="text"
-                  placeholder="ex: instagram.com"
-                  value={urlInput}
-                  onChange={e => setUrlInput(e.target.value)}
+                  type="text" placeholder="ex: instagram.com"
+                  value={urlInput} onChange={e => setUrlInput(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCustomUrl(); } }}
-                  style={{ ...urlInputStyle }}
+                  style={urlInputStyle}
                   onFocus={e => e.currentTarget.style.borderColor = "var(--green)"}
                   onBlur={e => e.currentTarget.style.borderColor = "var(--gray-200)"}
                 />
@@ -252,8 +309,27 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
           )}
 
           <ErrorMsg message={error} />
+
           <div style={{ maxWidth: "260px" }}>
-            <Button type="submit" loading={loading} disabled={!canSubmit}>Iniciar desafio</Button>
+            <Button
+              type="submit"
+              loading={loading}
+              disabled={!canSubmit}
+              // On click while disabled, mark touched so hints appear immediately
+              onClick={!canSubmit ? () => setReasonTouched(true) : undefined}
+            >
+              Iniciar desafio
+            </Button>
+            {/* Summary of what's still missing — shown below the button */}
+            {!canSubmit && (
+              <p style={blockedHint}>
+                {!daysValid && !reasonValid
+                  ? "Escolhe uma duração e escreve o teu motivo."
+                  : !daysValid
+                    ? "Escolhe a duração do desafio."
+                    : `Faltam ${reasonMissing} caract${reasonMissing === 1 ? "ere" : "eres"} no motivo.`}
+              </p>
+            )}
           </div>
         </form>
       </main>
@@ -267,10 +343,8 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
               <button onClick={() => setShowAppPicker(false)} style={{ background: "none", border: "none", color: "var(--gray-400)", cursor: "pointer", fontSize: "14px" }}>✕</button>
             </div>
             <input
-              type="text"
-              placeholder="Pesquisar..."
-              value={appSearch}
-              onChange={e => setAppSearch(e.target.value)}
+              type="text" placeholder="Pesquisar..."
+              value={appSearch} onChange={e => setAppSearch(e.target.value)}
               style={{ ...urlInputStyle, marginBottom: "12px", width: "100%" }}
               onFocus={e => e.currentTarget.style.borderColor = "var(--green)"}
               onBlur={e => e.currentTarget.style.borderColor = "var(--gray-200)"}
@@ -345,3 +419,5 @@ const addBtn: React.CSSProperties = { padding: "8px 14px", border: "1px solid va
 const smallBtn: React.CSSProperties = { padding: "6px 12px", border: "1px solid var(--gray-200)", borderRadius: "var(--radius-sm)", fontFamily: "var(--mono)", fontSize: "10px", letterSpacing: "0.08em", color: "var(--gray-600)", background: "transparent", cursor: "pointer" };
 const modalOverlay: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.08)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, backdropFilter: "blur(2px)" };
 const modalPanel: React.CSSProperties = { background: "var(--white)", borderRadius: "var(--radius-md)", padding: "24px", width: "420px", maxWidth: "90vw", boxShadow: "0 8px 48px rgba(0,0,0,0.12)", border: "1px solid var(--gray-200)" };
+const hintError: React.CSSProperties = { fontSize: "11px", color: "var(--red-muted)", marginTop: "2px" };
+const blockedHint: React.CSSProperties = { fontSize: "11px", color: "var(--gray-400)", marginTop: "8px", lineHeight: "1.5" };
