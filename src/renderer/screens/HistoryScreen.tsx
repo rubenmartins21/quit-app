@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ipc, ChallengeData } from "../lib/ipc";
 import { Sidebar } from "../components/Sidebar";
 import { AppScreen } from "../App";
+import { CalendarView } from "../components/CalendarView";
 
 interface Props {
   onNavigate: (screen: AppScreen) => void;
@@ -195,6 +196,7 @@ function DetailRow({ label, value, highlight }: {
 export function HistoryScreen({ onNavigate }: Props) {
   const [challenges, setChallenges] = useState<ChallengeData[] | null>(null);
   const [selected, setSelected]     = useState<ChallengeData | null>(null);
+  const [showCalendar, setShowCalendar] = useState(false);
 
   useEffect(() => {
     ipc.challenge.history().then(res => {
@@ -222,12 +224,84 @@ export function HistoryScreen({ onNavigate }: Props) {
         />
       )}
 
+      {showCalendar && challenges && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 150,
+            background: "rgba(0,0,0,0.08)",
+            backdropFilter: "blur(2px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+          onClick={() => setShowCalendar(false)}
+        >
+          <div
+            style={{
+              background: "var(--white)",
+              border: "1px solid var(--gray-200)",
+              borderRadius: "var(--radius-md)",
+              boxShadow: "0 8px 48px rgba(0,0,0,0.12)",
+              padding: "32px 36px",
+              maxWidth: "90vw",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              position: "relative",
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
+              <div>
+                <p style={{ fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase", color: "var(--gray-400)", marginBottom: "4px" }}>
+                  Histórico visual
+                </p>
+                <h2 style={{ fontFamily: "var(--serif)", fontSize: "22px", color: "var(--gray-800)", fontWeight: 400 }}>
+                  Calendário de actividade
+                </h2>
+              </div>
+              <button
+                onClick={() => setShowCalendar(false)}
+                style={{
+                  background: "none", border: "none",
+                  color: "var(--gray-400)", cursor: "pointer",
+                  fontSize: "16px", padding: "4px 8px",
+                  lineHeight: 1,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <CalendarView challenges={challenges} />
+          </div>
+        </div>
+      )}
+
       <main style={{
         flex: 1, padding: "52px 56px 40px",
         display: "flex", flexDirection: "column", overflowY: "auto",
       }}>
         <p style={eyebrow}>Histórico</p>
-        <h1 style={headline}>Desafios anteriores.</h1>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0" }}>
+          <h1 style={headline}>Desafios anteriores.</h1>
+          {challenges && challenges.length > 0 && (
+            <button
+              onClick={() => setShowCalendar(true)}
+              style={{
+                display: "flex", alignItems: "center", gap: "6px",
+                padding: "7px 14px",
+                border: "1px solid var(--gray-200)",
+                borderRadius: "var(--radius-sm)",
+                fontFamily: "var(--mono)",
+                fontSize: "10px", letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: "var(--gray-600)", background: "transparent",
+                cursor: "pointer", flexShrink: 0,
+                marginBottom: "4px",
+              }}
+            >
+              <span style={{ fontSize: "13px", lineHeight: 1 }}>📅</span>
+              Calendário
+            </button>
+          )}
+        </div>
 
         <div style={{ height: "1px", background: "var(--gray-200)", margin: "24px 0 32px" }} />
 
