@@ -269,7 +269,7 @@ export function HistoryScreen({ onNavigate }: Props) {
                 ✕
               </button>
             </div>
-            <CalendarView challenges={challenges} />
+            <CalendarView challenges={challenges} bestStreak={best} />
           </div>
         </div>
       )}
