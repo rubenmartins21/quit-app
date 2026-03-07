@@ -26,6 +26,7 @@ import {
   SAFE_DNS_SECONDARY,
   HOSTS_MARKER_START,
   HOSTS_MARKER_END,
+  SAFESEARCH_HOSTS_ENTRIES,
 } from "./blocklist.js";
 import { PAC_URL } from "./pacServer.js";
 import type { BlockerAction, ElevatedOptions, HelperResult } from "./elevatedHelper.js";
@@ -45,7 +46,9 @@ function toBashArray(paths: string[]): string {
 
 function buildScript(opts: ElevatedOptions = {}): string {
   const allDomains = [...ADULT_DOMAINS, ...(opts.extraDomains ?? [])];
-  const domainLines = allDomains.map(d => `0.0.0.0 ${d}`).join("\n");
+  const domainLines = allDomains.map(d => `0.0.0.0 ${d}`).join("\n")
+    + "\n# SafeSearch enforcement\n"
+    + SAFESEARCH_HOSTS_ENTRIES;
   const resultPath  = getResultPath();
   const appPaths    = toBashArray(opts.blockedApps ?? []);
 

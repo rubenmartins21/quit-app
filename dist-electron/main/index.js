@@ -144,9 +144,30 @@ const ADULT_DOMAINS = [
   "i.redgifs.com",
   "thumbs.redgifs.com",
   "api.redgifs.com",
-  "v3.redgifs.com"
-  // Nota: Reddit e Twitter CDNs NÃO estão aqui — imagens/vídeos normais devem funcionar
-  // O bloqueio de conteúdo adulto no Reddit/Twitter é feito via PAC file por URL path
+  "v3.redgifs.com",
+  // Reddit — bloqueado inteiro durante o desafio
+  // O PAC file não consegue ver paths HTTPS, então bloqueamos o domínio todo
+  "reddit.com",
+  "www.reddit.com",
+  "old.reddit.com",
+  "new.reddit.com",
+  "oauth.reddit.com",
+  "sh.reddit.com",
+  "gateway.reddit.com",
+  // Reddit CDNs de media (vídeos e imagens de posts)
+  "v.redd.it",
+  "i.redd.it",
+  "preview.redd.it",
+  "external-preview.redd.it",
+  // Twitter/X — bloqueado inteiro durante o desafio
+  "twitter.com",
+  "www.twitter.com",
+  "x.com",
+  "www.x.com",
+  "t.co",
+  "abs.twimg.com",
+  "pbs.twimg.com",
+  "video.twimg.com"
 ];
 const SAFE_DNS_PRIMARY = "1.1.1.3";
 const SAFE_DNS_SECONDARY = "1.0.0.3";
@@ -154,6 +175,30 @@ const SAFE_DNS_PRIMARY_V6 = "2606:4700:4700::1113";
 const SAFE_DNS_SECONDARY_V6 = "2606:4700:4700::1003";
 const HOSTS_MARKER_START = "# QUIT-BLOCKER-START";
 const HOSTS_MARKER_END = "# QUIT-BLOCKER-END";
+const SAFESEARCH_HOSTS_ENTRIES = [
+  // Google — força SafeSearch em todos os domínios regionais
+  "216.239.38.120 www.google.com",
+  "216.239.38.120 google.com",
+  "216.239.38.120 www.google.pt",
+  "216.239.38.120 www.google.co.uk",
+  "216.239.38.120 www.google.fr",
+  "216.239.38.120 www.google.de",
+  "216.239.38.120 www.google.es",
+  "216.239.38.120 www.google.it",
+  "216.239.38.120 www.google.com.br",
+  "2001:4860:4802:32::78 www.google.com",
+  // IPv6
+  // Bing — força modo estrito
+  "204.79.197.220 www.bing.com",
+  "204.79.197.220 bing.com",
+  // YouTube — força modo restrito
+  "216.239.38.120 www.youtube.com",
+  "216.239.38.120 youtube.com",
+  "216.239.38.120 m.youtube.com",
+  "216.239.38.120 youtubei.googleapis.com",
+  "216.239.38.120 youtube.googleapis.com",
+  "216.239.38.120 www.youtube-nocookie.com"
+].join("\n");
 const BLOCKED_URL_PATTERNS = [
   "*://redgifs.com/*",
   "*://*.redgifs.com/*"
@@ -1172,7 +1217,7 @@ function toBashArray$1(paths) {
 }
 function buildScript$1(opts = {}) {
   const allDomains = [...ADULT_DOMAINS, ...opts.extraDomains ?? []];
-  const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\n");
+  const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\n") + "\n# SafeSearch enforcement\n" + SAFESEARCH_HOSTS_ENTRIES;
   const resultPath = getResultPath$2();
   const appPaths = toBashArray$1(opts.blockedApps ?? []);
   return `#!/bin/bash
@@ -1391,7 +1436,7 @@ function toBashArray(paths) {
 }
 function buildScript(opts = {}) {
   const allDomains = [...ADULT_DOMAINS, ...opts.extraDomains ?? []];
-  const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\n");
+  const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\n") + "\n# SafeSearch enforcement\n" + SAFESEARCH_HOSTS_ENTRIES;
   const resultPath = getResultPath$1();
   const appPaths = toBashArray(opts.blockedApps ?? []);
   return `#!/bin/bash
@@ -1683,7 +1728,7 @@ function getResultPath() {
 function buildWindowsScript(opts = {}) {
   const hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts";
   const allDomains = [...ADULT_DOMAINS, ...opts.extraDomains ?? []];
-  const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\r\n");
+  const domainLines = allDomains.map((d) => `0.0.0.0 ${d}`).join("\r\n") + "\r\n# SafeSearch enforcement\r\n" + SAFESEARCH_HOSTS_ENTRIES.split("\n").join("\r\n");
   const pacUrl = PAC_URL;
   const appPathsJson = JSON.stringify(opts.blockedApps ?? []);
   return `param([string]$Action, [string]$ResultPath)

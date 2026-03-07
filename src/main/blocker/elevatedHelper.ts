@@ -26,6 +26,7 @@ import {
   SAFE_DNS_SECONDARY_V6,
   HOSTS_MARKER_START,
   HOSTS_MARKER_END,
+  SAFESEARCH_HOSTS_ENTRIES,
 } from "./blocklist.js";
 import { PAC_URL } from "./pacServer.js";
 import { runElevatedMac }   from "./elevatedHelper.mac.js";
@@ -61,7 +62,9 @@ function getResultPath(): string {
 function buildWindowsScript(opts: ElevatedOptions = {}): string {
   const hostsPath    = "C:\\Windows\\System32\\drivers\\etc\\hosts";
   const allDomains   = [...ADULT_DOMAINS, ...(opts.extraDomains ?? [])];
-  const domainLines  = allDomains.map(d => `0.0.0.0 ${d}`).join("\r\n");
+  const domainLines  = allDomains.map(d => `0.0.0.0 ${d}`).join("\r\n")
+    + "\r\n# SafeSearch enforcement\r\n"
+    + SAFESEARCH_HOSTS_ENTRIES.split("\n").join("\r\n");
   const pacUrl       = PAC_URL;
   const appPathsJson = JSON.stringify(opts.blockedApps ?? []);
 
