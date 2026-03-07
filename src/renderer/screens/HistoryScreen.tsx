@@ -231,6 +231,8 @@ export function HistoryScreen({ onNavigate }: Props) {
             background: "rgba(0,0,0,0.08)",
             backdropFilter: "blur(2px)",
             display: "flex", alignItems: "center", justifyContent: "center",
+            padding: "32px 16px",
+            overflowY: "auto",
           }}
           onClick={() => setShowCalendar(false)}
         >
@@ -241,10 +243,10 @@ export function HistoryScreen({ onNavigate }: Props) {
               borderRadius: "var(--radius-md)",
               boxShadow: "0 8px 48px rgba(0,0,0,0.12)",
               padding: "32px 36px",
-              maxWidth: "90vw",
-              maxHeight: "90vh",
-              overflowY: "auto",
+              width: "960px",
+              maxWidth: "95vw",
               position: "relative",
+              margin: "auto",
             }}
             onClick={e => e.stopPropagation()}
           >

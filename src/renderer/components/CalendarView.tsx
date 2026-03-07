@@ -1,15 +1,12 @@
 /**
  * CalendarView — heatmap anual de desafios.
  *
- * Novidades:
- *  - Número do dia visível em cada célula (quadradinhos 26×26px)
- *  - Botão "Copiar imagem" — gera PNG via html2canvas e copia para clipboard
- *    A imagem inclui: logo "Quit", stats do ano, melhor streak, calendário
- *
- * Dependência: html2canvas  →  npm install html2canvas
+ * - Número do dia em cada célula (26×26px)
+ * - Grid responsivo: 4 → 3 → 2 → 1 colunas via ResizeObserver
+ * - Dropdown "Partilhar": Copiar imagem / Baixar PNG
  */
 
-import React, { useMemo, useState, useRef } from "react";
+import React, { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { ChallengeData } from "../lib/ipc";
 
 interface Props {
@@ -18,50 +15,27 @@ interface Props {
 }
 
 type DayState = "streak" | "relapse" | "empty";
-
-interface DayInfo {
-  state: DayState;
-  challengeId?: string;
-  tooltip?: string;
-}
+interface DayInfo { state: DayState; challengeId?: string; tooltip?: string; }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function toDateKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function addDays(date: Date, n: number): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() + n);
-  return d;
-}
-
-function startOfDay(iso: string): Date {
-  const d = new Date(iso);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
+function toDateKey(d: Date): string { return d.toISOString().slice(0, 10); }
+function addDays(d: Date, n: number): Date { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+function startOfDay(iso: string): Date { const d = new Date(iso); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
 
 function buildDayMap(challenges: ChallengeData[]): Map<string, DayInfo> {
   const map = new Map<string, DayInfo>();
   for (const c of challenges) {
     const start = startOfDay(c.startedAt);
-    const endBoundary = c.cancelledAt
-      ? startOfDay(c.cancelledAt)
-      : c.completedAt ? startOfDay(c.completedAt) : startOfDay(c.endsAt);
-
-    let cursor = new Date(start);
-    while (cursor < endBoundary) {
+    const endB  = c.cancelledAt ? startOfDay(c.cancelledAt) : c.completedAt ? startOfDay(c.completedAt) : startOfDay(c.endsAt);
+    let cursor  = new Date(start);
+    while (cursor < endB) {
       const key = toDateKey(cursor);
-      if (!map.has(key) || map.get(key)!.state !== "relapse") {
+      if (!map.has(key) || map.get(key)!.state !== "relapse")
         map.set(key, { state: "streak", challengeId: c.id, tooltip: `Streak — ${c.durationDays} dias` });
-      }
       cursor = addDays(cursor, 1);
     }
-    if (c.cancelledAt) {
-      const key = toDateKey(startOfDay(c.cancelledAt));
-      map.set(key, { state: "relapse", challengeId: c.id, tooltip: "Recaída" });
-    }
+    if (c.cancelledAt) map.set(toDateKey(startOfDay(c.cancelledAt)), { state: "relapse", challengeId: c.id, tooltip: "Recaída" });
   }
   return map;
 }
@@ -73,19 +47,14 @@ interface MonthData { year: number; month: number; weeks: (Date | null)[][]; }
 function buildMonth(year: number, month: number): MonthData {
   const firstDay = new Date(year, month, 1);
   const lastDay  = new Date(year, month + 1, 0);
-  let startDow = firstDay.getDay();
-  startDow = startDow === 0 ? 6 : startDow - 1;
-
+  let startDow   = firstDay.getDay(); startDow = startDow === 0 ? 6 : startDow - 1;
   const weeks: (Date | null)[][] = [];
   let week: (Date | null)[] = Array(startDow).fill(null);
   for (let d = 1; d <= lastDay.getDate(); d++) {
     week.push(new Date(year, month, d));
     if (week.length === 7) { weeks.push(week); week = []; }
   }
-  if (week.length > 0) {
-    while (week.length < 7) week.push(null);
-    weeks.push(week);
-  }
+  if (week.length > 0) { while (week.length < 7) week.push(null); weeks.push(week); }
   return { year, month, weeks };
 }
 
@@ -93,6 +62,40 @@ const MONTH_SHORT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out"
 const DOW_LABELS  = ["S","T","Q","Q","S","S","D"];
 const CELL = 26;
 const GAP  = 3;
+
+// Width of one fully-rendered month column (7 cells + 6 gaps + some breathing room)
+// 7*26 + 6*3 = 182 + some label padding ≈ 190
+const MONTH_COL_WIDTH = 192;
+
+// ── Responsive column count ───────────────────────────────────────────────────
+
+function useColumns(containerRef: React.RefObject<HTMLDivElement | null>): number {
+  const [cols, setCols] = useState(4);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const update = (w: number) => {
+      // padding 24px each side = 48px total
+      const available = w - 48;
+      if (available >= MONTH_COL_WIDTH * 4 + 32 * 3) setCols(4);
+      else if (available >= MONTH_COL_WIDTH * 3 + 32 * 2) setCols(3);
+      else if (available >= MONTH_COL_WIDTH * 2 + 32) setCols(2);
+      else setCols(1);
+    };
+
+    update(el.offsetWidth);
+
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) update(entry.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [containerRef]);
+
+  return cols;
+}
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 
@@ -104,45 +107,33 @@ function Tooltip({ text, x, y }: { text: string; x: number; y: number }) {
       fontSize: "10px", letterSpacing: "0.06em",
       padding: "5px 10px", borderRadius: "3px",
       pointerEvents: "none", zIndex: 999, whiteSpace: "nowrap",
-    }}>
-      {text}
-    </div>
+    }}>{text}</div>
   );
 }
 
 // ── Day cell ──────────────────────────────────────────────────────────────────
 
 function DayCell({ date, dayInfo, onHover, onLeave }: {
-  date: Date | null;
-  dayInfo: DayInfo | undefined;
+  date: Date | null; dayInfo: DayInfo | undefined;
   onHover: (e: React.MouseEvent, info: DayInfo, date: Date) => void;
   onLeave: () => void;
 }) {
-  if (!date) return <div style={{ width: CELL, height: CELL }} />;
+  if (!date) return <div style={{ width: CELL, height: CELL, flexShrink: 0 }} />;
 
   const state   = dayInfo?.state ?? "empty";
   const isToday = toDateKey(date) === toDateKey(new Date());
 
-  const bg =
-    state === "streak"  ? "var(--green)" :
-    state === "relapse" ? "var(--red-muted)" :
-    "var(--gray-200)";
-
-  const textColor =
-    state === "streak"  ? "rgba(255,255,255,0.9)" :
-    state === "relapse" ? "rgba(255,255,255,0.95)" :
-    "var(--gray-400)";
+  const bg         = state === "streak" ? "var(--green)" : state === "relapse" ? "var(--red-muted)" : "var(--gray-200)";
+  const textColor  = state !== "empty" ? "rgba(255,255,255,0.9)" : "var(--gray-400)";
 
   return (
     <div
       onMouseEnter={dayInfo ? (e) => onHover(e, dayInfo, date) : undefined}
       onMouseLeave={dayInfo ? onLeave : undefined}
       style={{
-        width: CELL, height: CELL, borderRadius: 4,
-        background: bg,
+        width: CELL, height: CELL, borderRadius: 4, background: bg, flexShrink: 0,
         display: "flex", alignItems: "center", justifyContent: "center",
-        outline: isToday ? "2px solid var(--gray-600)" : "none",
-        outlineOffset: "1px", flexShrink: 0,
+        outline: isToday ? "2px solid var(--gray-600)" : "none", outlineOffset: "1px",
       }}
     >
       <span style={{ fontSize: "8px", fontFamily: "var(--mono)", color: textColor, lineHeight: 1, userSelect: "none" }}>
@@ -155,8 +146,7 @@ function DayCell({ date, dayInfo, onHover, onLeave }: {
 // ── Month block ───────────────────────────────────────────────────────────────
 
 function MonthBlock({ monthData, dayMap, onHover, onLeave }: {
-  monthData: MonthData;
-  dayMap: Map<string, DayInfo>;
+  monthData: MonthData; dayMap: Map<string, DayInfo>;
   onHover: (e: React.MouseEvent, info: DayInfo, date: Date) => void;
   onLeave: () => void;
 }) {
@@ -213,42 +203,32 @@ function useYearStats(challenges: ChallengeData[], year: number) {
     for (const c of challenges) {
       const start = startOfDay(c.startedAt);
       const endB  = c.cancelledAt ? startOfDay(c.cancelledAt) : c.completedAt ? startOfDay(c.completedAt) : startOfDay(c.endsAt);
-      let cursor = new Date(Math.max(start.getTime(), sy.getTime()));
-      const end  = new Date(Math.min(endB.getTime(), ey.getTime()));
+      let cursor  = new Date(Math.max(start.getTime(), sy.getTime()));
+      const end   = new Date(Math.min(endB.getTime(), ey.getTime()));
       while (cursor < end) { streakDays++; cursor = addDays(cursor, 1); }
-      if (c.cancelledAt) {
-        const rd = startOfDay(c.cancelledAt);
-        if (rd >= sy && rd < ey) relapses++;
-      }
+      if (c.cancelledAt) { const rd = startOfDay(c.cancelledAt); if (rd >= sy && rd < ey) relapses++; }
     }
     return { streakDays, relapses };
   }, [challenges, year]);
 }
 
-// ── Export via html2canvas ────────────────────────────────────────────────────
+// ── Export helpers ────────────────────────────────────────────────────────────
 
-async function exportCalendarImage(
+async function buildExportCanvas(
   calendarEl: HTMLElement,
-  year: number,
-  streakDays: number,
-  relapses: number,
-  bestStreak: number,
-): Promise<void> {
+  year: number, streakDays: number, relapses: number, bestStreak: number,
+): Promise<HTMLCanvasElement> {
   const html2canvas = (await import("html2canvas")).default;
 
   const wrapper = document.createElement("div");
   Object.assign(wrapper.style, {
-    position: "fixed",
-    top: "-9999px",
-    left: "-9999px",
-    background: "#ffffff",
-    padding: "36px 40px 32px",
+    position: "fixed", top: "-9999px", left: "-9999px",
+    background: "#ffffff", padding: "36px 40px 32px",
     fontFamily: "'DM Mono','Courier New',monospace",
     width: (calendarEl.offsetWidth + 80) + "px",
     boxSizing: "border-box",
   });
 
-  // Header: logo Quit + ano + melhor streak
   wrapper.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:22px;">
       <div>
@@ -277,12 +257,9 @@ async function exportCalendarImage(
     </div>
   `;
 
-  // Clone do calendário sem chrome (padding, borda, fundo)
   const clone = calendarEl.cloneNode(true) as HTMLElement;
   Object.assign(clone.style, { padding: "0", border: "none", background: "transparent", boxShadow: "none" });
-
-  // Remove o header de controlos (ano selector + botão copiar) do clone
-  // — é sempre o primeiro filho do container
+  // Hide controls row (first child = header with buttons/year selector)
   const firstChild = clone.firstElementChild as HTMLElement | null;
   if (firstChild) firstChild.style.display = "none";
 
@@ -290,31 +267,116 @@ async function exportCalendarImage(
   document.body.appendChild(wrapper);
 
   try {
-    const canvas = await html2canvas(wrapper, {
-      backgroundColor: "#ffffff",
-      scale: 2,
-      useCORS: true,
-      logging: false,
-    });
-
-    await new Promise<void>((resolve) => {
-      canvas.toBlob(async (blob) => {
-        if (!blob) { resolve(); return; }
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-        } catch {
-          // Fallback: download directo
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url; a.download = `quit-${year}.png`; a.click();
-          URL.revokeObjectURL(url);
-        }
-        resolve();
-      }, "image/png");
-    });
+    return await html2canvas(wrapper, { backgroundColor: "#ffffff", scale: 2, useCORS: true, logging: false });
   } finally {
     document.body.removeChild(wrapper);
   }
+}
+
+async function copyImageToClipboard(canvas: HTMLCanvasElement): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    canvas.toBlob(async (blob) => {
+      if (!blob) { reject(new Error("blob null")); return; }
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        resolve();
+      } catch (e) { reject(e); }
+    }, "image/png");
+  });
+}
+
+async function downloadImage(canvas: HTMLCanvasElement, year: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    canvas.toBlob((blob) => {
+      if (!blob) { resolve(); return; }
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement("a");
+      a.href = url; a.download = `quit-${year}.png`; a.click();
+      URL.revokeObjectURL(url);
+      resolve();
+    }, "image/png");
+  });
+}
+
+// ── Share dropdown ────────────────────────────────────────────────────────────
+
+type ShareAction = "copy" | "download";
+type ShareState  = "idle" | "loading" | "done" | "error";
+
+function ShareDropdown({ onAction, disabled }: {
+  onAction: (action: ShareAction) => void;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref             = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        onClick={() => !disabled && setOpen(o => !o)}
+        disabled={disabled}
+        style={{
+          display: "flex", alignItems: "center", gap: "6px",
+          padding: "6px 12px",
+          border: "1px solid var(--gray-200)",
+          borderRadius: "var(--radius-sm)",
+          fontFamily: "var(--mono)", fontSize: "10px", letterSpacing: "0.08em",
+          color: "var(--gray-600)", background: "transparent",
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.5 : 1,
+          transition: "all 0.15s",
+        }}
+      >
+        <span style={{ fontSize: "11px", lineHeight: 1 }}>⎘</span>
+        Partilhar
+        <span style={{ fontSize: "8px", lineHeight: 1, opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 4px)", right: 0,
+          background: "var(--white)",
+          border: "1px solid var(--gray-200)",
+          borderRadius: "var(--radius-sm)",
+          boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+          minWidth: "160px", zIndex: 50,
+          overflow: "hidden",
+        }}>
+          {([
+            { action: "copy"     as ShareAction, icon: "⎘", label: "Copiar imagem" },
+            { action: "download" as ShareAction, icon: "↓", label: "Baixar PNG"    },
+          ] as const).map(({ action, icon, label }) => (
+            <div
+              key={action}
+              onClick={() => { setOpen(false); onAction(action); }}
+              style={{
+                display: "flex", alignItems: "center", gap: "10px",
+                padding: "10px 14px", cursor: "pointer",
+                fontSize: "11px", color: "var(--gray-700)",
+                fontFamily: "var(--mono)", letterSpacing: "0.06em",
+                transition: "background 0.1s",
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = "var(--gray-50)")}
+              onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+            >
+              <span style={{ fontSize: "13px", lineHeight: 1, color: "var(--gray-400)" }}>{icon}</span>
+              {label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -333,9 +395,12 @@ export function CalendarView({ challenges, bestStreak = 0 }: Props) {
   }, [challenges]);
 
   const [year, setYear]           = useState(() => availableYears[availableYears.length - 1] ?? today.getFullYear());
-  const [copyState, setCopyState] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [tooltip, setTooltip]     = useState<{ text: string; x: number; y: number } | null>(null);
-  const containerRef              = useRef<HTMLDivElement>(null);
+  const [shareState, setShareState] = useState<ShareState>("idle");
+  const [shareMsg, setShareMsg]     = useState("");
+  const [tooltip, setTooltip]       = useState<{ text: string; x: number; y: number } | null>(null);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const cols         = useColumns(containerRef);
 
   const dayMap = useMemo(() => buildDayMap(challenges), [challenges]);
   const months = useMemo(() => Array.from({ length: 12 }, (_, m) => buildMonth(year, m)), [year]);
@@ -356,87 +421,81 @@ export function CalendarView({ challenges, bestStreak = 0 }: Props) {
     setTooltip({ text: `${label} — ${info.tooltip}`, x: e.clientX, y: e.clientY });
   }
 
-  async function handleCopyImage() {
+  async function handleShare(action: ShareAction) {
     if (!containerRef.current) return;
-    setCopyState("loading");
+    setShareState("loading");
+    setShareMsg("");
+
     try {
-      await exportCalendarImage(containerRef.current, year, streakDays, relapses, bestStreak);
-      setCopyState("done");
-      setTimeout(() => setCopyState("idle"), 2500);
+      const canvas = await buildExportCanvas(containerRef.current, year, streakDays, relapses, bestStreak);
+
+      if (action === "copy") {
+        try {
+          await copyImageToClipboard(canvas);
+          setShareMsg("Copiado ✓");
+        } catch {
+          // Clipboard failed — fallback to download silently
+          await downloadImage(canvas, year);
+          setShareMsg("Baixado ✓");
+        }
+      } else {
+        await downloadImage(canvas, year);
+        setShareMsg("Baixado ✓");
+      }
+
+      setShareState("done");
+      setTimeout(() => { setShareState("idle"); setShareMsg(""); }, 2500);
     } catch {
-      setCopyState("error");
-      setTimeout(() => setCopyState("idle"), 2500);
+      setShareState("error");
+      setShareMsg("Erro — tenta novamente");
+      setTimeout(() => { setShareState("idle"); setShareMsg(""); }, 3000);
     }
   }
 
-  const copyLabel =
-    copyState === "loading" ? "A gerar…" :
-    copyState === "done"    ? "Copiado ✓" :
-    copyState === "error"   ? "Erro, tenta novamente" :
-    "Copiar imagem";
-
-  const copyBorderColor =
-    copyState === "done"  ? "var(--green)" :
-    copyState === "error" ? "var(--red-muted)" :
-    "var(--gray-200)";
-
-  const copyTextColor =
-    copyState === "done"  ? "var(--green)" :
-    copyState === "error" ? "var(--red-muted)" :
-    "var(--gray-600)";
+  // Gap between columns adapts to available space
+  const colGap = cols >= 3 ? "28px 32px" : cols === 2 ? "24px 28px" : "20px";
 
   return (
     <div ref={containerRef} style={containerStyle}>
 
-      {/* ── Header row ── */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      {/* ── Header ── */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
         <div>
           <p style={sectionLabel}>Calendário</p>
-          <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
             <StatPill label="dias de streak" value={streakDays} color="var(--green)" />
             <StatPill label="recaídas"       value={relapses}   color="var(--red-muted)" />
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button
-            onClick={handleCopyImage}
-            disabled={copyState === "loading"}
-            style={{
-              display: "flex", alignItems: "center", gap: "6px",
-              padding: "6px 12px",
-              border: `1px solid ${copyBorderColor}`,
-              borderRadius: "var(--radius-sm)",
-              fontFamily: "var(--mono)", fontSize: "10px", letterSpacing: "0.08em",
-              color: copyTextColor, background: "transparent",
-              cursor: copyState === "loading" ? "wait" : "pointer",
-              opacity: copyState === "loading" ? 0.6 : 1,
-              transition: "all 0.15s",
-            }}
-          >
-            <span style={{ fontSize: "11px", lineHeight: 1 }}>
-              {copyState === "done" ? "✓" : copyState === "loading" ? "…" : "⎘"}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {/* Feedback label */}
+          {shareMsg && (
+            <span style={{
+              fontSize: "10px", fontFamily: "var(--mono)",
+              color: shareState === "error" ? "var(--red-muted)" : "var(--green)",
+              letterSpacing: "0.06em",
+            }}>
+              {shareMsg}
             </span>
-            {copyLabel}
-          </button>
+          )}
+          <ShareDropdown onAction={handleShare} disabled={shareState === "loading"} />
           <YearSelector year={year} availableYears={availableYears} onChange={setYear} />
         </div>
       </div>
 
       {/* ── Legend ── */}
-      <div style={{ display: "flex", gap: 16, marginBottom: 20, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 14, marginBottom: 20, alignItems: "center", flexWrap: "wrap" }}>
         <LegendItem color="var(--green)"     label="Dia de streak" />
         <LegendItem color="var(--red-muted)" label="Recaída" />
         <LegendItem color="var(--gray-200)"  label="Sem registo" />
-        <span style={{ fontSize: "9px", color: "var(--gray-400)", fontFamily: "var(--mono)", opacity: 0.7 }}>
-          · hoje com contorno
-        </span>
+        <span style={{ fontSize: "9px", color: "var(--gray-400)", fontFamily: "var(--mono)", opacity: 0.7 }}>· hoje com contorno</span>
       </div>
 
-      {/* ── Month grid 4×3 ── */}
+      {/* ── Month grid — responsive columns ── */}
       <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(4, auto)",
-        gap: "28px 32px",
+        gridTemplateColumns: `repeat(${cols}, auto)`,
+        gap: colGap,
         justifyContent: "start",
       }}>
         {months.map((m) => (
