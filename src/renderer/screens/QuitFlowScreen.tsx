@@ -12,7 +12,6 @@ type Step = 1 | 2 | 3 | 4;
 
 const DELAY_SECONDS = 15;
 
-// Texts shown instead of mascot
 const STEP_VOICES: Record<Step, string> = {
   1: `Tens a certeza? Fizeste ${0} dias. Este momento vai passar.`,
   2: "Escreve o que estás a sentir agora mesmo. Não há resposta certa.",
@@ -42,7 +41,6 @@ export function QuitFlowScreen({ challenge, onDone, onBack }: Props) {
   const [error, setError] = useState("");
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Step 1 countdown
   useEffect(() => {
     if (step !== 1) return;
     setCountdown(DELAY_SECONDS);
@@ -70,10 +68,8 @@ export function QuitFlowScreen({ challenge, onDone, onBack }: Props) {
     <div style={styles.overlay}>
       <div style={styles.panel}>
 
-        {/* Step dots */}
         <StepDots current={step} />
 
-        {/* Voice text (replaces mascot) */}
         <div style={styles.voiceBox}>
           <p style={styles.voiceText}>{voiceText}</p>
         </div>
@@ -170,6 +166,17 @@ export function QuitFlowScreen({ challenge, onDone, onBack }: Props) {
                 — Após 24h: recaída registada, streak perdido
               </p>
             </div>
+
+            {/* Aviso sobre bloqueio offline */}
+            <div style={styles.offlineNotice}>
+              <p style={styles.offlineNoticeText}>
+                <span style={{ color: "var(--gray-600)" }}>⚠ </span>
+                O bloqueio só é removido automaticamente quando o Quit está aberto.
+                Se fechares o app antes do desbloqueio, o bloqueio mantém-se —
+                basta abrir o Quit novamente para o remover.
+              </p>
+            </div>
+
             <ErrorMsg message={error} />
             <div style={styles.btnRow}>
               <button onClick={() => setStep(3)} style={styles.ghostBtn}>← Voltar</button>
@@ -237,10 +244,20 @@ const styles: Record<string, React.CSSProperties> = {
   reasonText: { fontSize: "13px", color: "var(--green)", lineHeight: "1.7", fontStyle: "italic" },
   warningBox: {
     background: "var(--gray-50)", border: "1px solid var(--gray-200)",
-    borderRadius: "var(--radius-sm)", padding: "16px 18px", marginBottom: "20px",
+    borderRadius: "var(--radius-sm)", padding: "16px 18px", marginBottom: "12px",
   },
   warningLabel: { fontSize: "10px", letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--gray-400)", marginBottom: "10px" },
   warningText: { fontSize: "12px", color: "var(--gray-600)", lineHeight: "2" },
+  offlineNotice: {
+    borderLeft: "2px solid var(--gray-200)",
+    paddingLeft: "12px",
+    marginBottom: "20px",
+  },
+  offlineNoticeText: {
+    fontSize: "11px",
+    color: "var(--gray-400)",
+    lineHeight: "1.65",
+  },
   btnRow: { display: "flex", gap: "12px", alignItems: "center", justifyContent: "space-between" },
   ghostBtn: {
     padding: "9px 16px", border: "1px solid var(--gray-200)", borderRadius: "var(--radius-sm)",

@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld("quit", {
   },
   blocker: {
     status: () => ipcRenderer.invoke("blocker:status"),
+    deactivate: () => ipcRenderer.invoke("blocker:deactivate"),
     installedApps: () => ipcRenderer.invoke("blocker:installed-apps"),
     add: (payload: {
       url?: string;

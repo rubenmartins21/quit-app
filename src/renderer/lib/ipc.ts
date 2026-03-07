@@ -62,6 +62,7 @@ interface QuitAPI {
   };
   blocker: {
     status: () => Promise<BlockerStatus>;
+    deactivate: () => Promise<{ ok?: boolean; error?: string }>;
     installedApps: () => Promise<{ ok?: boolean; apps: InstalledApp[] }>;
     add: (payload: AddToBlockerPayload) => Promise<{ ok?: boolean; error?: string }>;
   };
@@ -88,6 +89,7 @@ export const ipc = {
   },
   blocker: {
     status: () => getQuit().blocker.status(),
+    deactivate: () => getQuit().blocker.deactivate(),
     installedApps: () => getQuit().blocker.installedApps(),
     add: (payload: AddToBlockerPayload) => getQuit().blocker.add(payload),
   },
