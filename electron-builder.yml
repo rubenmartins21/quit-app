@@ -1,0 +1,68 @@
+appId: com.quit.app
+productName: Quit
+copyright: Copyright © 2025 Quit
+
+# Directórios
+directories:
+  buildResources: build
+  output: dist-electron
+
+# Ficheiros a incluir no build
+files:
+  - dist/**/*
+  - dist-main/**/*
+  - dist-preload/**/*
+  - node_modules/**/*
+  - package.json
+
+# Assets extra incluídos em resources/ dentro da instalação
+extraResources:
+  - from: build/uninstall-cleanup.ps1
+    to: uninstall-cleanup.ps1
+
+# ── Windows ───────────────────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  # Regista o app como uninstaller wrapper — abre o Electron com --uninstall
+  # em vez do uninstaller real directamente.
+  # O NSIS hook (installer.nsh) sobrescreve o UninstallString no registry.
+
+nsis:
+  oneClick: false               # mostra wizard de instalação
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Quit
+  # Hook personalizado — define o ecrã de desinstalação com fricção
+  include: build/installer.nsh
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+dmg:
+  sign: false
+
+# ── Linux ─────────────────────────────────────────────────────────────────────
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  icon: build/icon.png
+  category: Utility

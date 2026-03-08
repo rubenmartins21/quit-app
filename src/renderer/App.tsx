@@ -6,7 +6,12 @@ import { CreateChallengeScreen } from "./screens/CreateChallengeScreen";
 import { HistoryScreen } from "./screens/HistoryScreen";
 import { LoadingScreen } from "./screens/LoadingScreen";
 import { BlockerSyncScreen } from "./screens/BlockerSyncScreen";
+import UninstallScreen from "./screens/UninstallScreen";
+import TamperAlert from "./components/TamperAlert";
 import { ipc, ChallengeData } from "./lib/ipc";
+
+// Detecta se foi lançado em modo desinstalação
+const IS_UNINSTALL = new URLSearchParams(window.location.search).get("screen") === "uninstall";
 
 export type AppScreen = "dashboard" | "challenge" | "history";
 
@@ -19,6 +24,9 @@ export type AppScreen = "dashboard" | "challenge" | "history";
 type BlockerBootState = "checking" | "needs_sync" | "ok";
 
 export function App() {
+  // Modo desinstalação — mostra ecrã de fricção directamente
+  if (IS_UNINSTALL) return <UninstallScreen />;
+
   const { state, login, logout } = useAuth();
   const [screen, setScreen] = useState<AppScreen>("dashboard");
   const [blockerBoot, setBlockerBoot] = useState<BlockerBootState>("checking");
@@ -84,10 +92,13 @@ export function App() {
   }
 
   return (
-    <DashboardScreen
-      user={state.user}
-      onLogout={logout}
-      onNavigate={setScreen}
-    />
+    <>
+      <DashboardScreen
+        user={state.user}
+        onLogout={logout}
+        onNavigate={setScreen}
+      />
+      <TamperAlert />
+    </>
   );
 }

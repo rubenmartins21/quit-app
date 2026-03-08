@@ -37,4 +37,20 @@ contextBridge.exposeInMainWorld("quit", {
       blockTwitter?: boolean;
     }) => ipcRenderer.invoke("blocker:add", payload),
   },
+  // Eventos push do main → renderer
+  ipc: {
+    on: (channel: string, fn: (...args: unknown[]) => void) => {
+      const allowed = ["blocker:watchdog", "app:before-quit"];
+      if (!allowed.includes(channel)) return;
+      ipcRenderer.on(channel, (_event, ...args) => fn(...args));
+    },
+    off: (channel: string, fn: (...args: unknown[]) => void) => {
+      ipcRenderer.removeListener(channel, fn);
+    },
+  },
+  // Uninstall flow
+  app: {
+    confirmUninstall: () => ipcRenderer.invoke("app:confirm-uninstall"),
+    cancelUninstall:  () => ipcRenderer.invoke("app:cancel-uninstall"),
+  },
 });

@@ -22,6 +22,22 @@ electron.contextBridge.exposeInMainWorld("quit", {
     deactivate: () => electron.ipcRenderer.invoke("blocker:deactivate"),
     installedApps: () => electron.ipcRenderer.invoke("blocker:installed-apps"),
     add: (payload) => electron.ipcRenderer.invoke("blocker:add", payload)
+  },
+  // Eventos push do main → renderer
+  ipc: {
+    on: (channel, fn) => {
+      const allowed = ["blocker:watchdog", "app:before-quit"];
+      if (!allowed.includes(channel)) return;
+      electron.ipcRenderer.on(channel, (_event, ...args) => fn(...args));
+    },
+    off: (channel, fn) => {
+      electron.ipcRenderer.removeListener(channel, fn);
+    }
+  },
+  // Uninstall flow
+  app: {
+    confirmUninstall: () => electron.ipcRenderer.invoke("app:confirm-uninstall"),
+    cancelUninstall: () => electron.ipcRenderer.invoke("app:cancel-uninstall")
   }
 });
 //# sourceMappingURL=index.js.map
