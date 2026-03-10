@@ -1,13 +1,17 @@
 /**
- * CalendarView — heatmap anual de desafios.
+ * CalendarView.tsx — Quit design system
+ * Localização: src/renderer/components/CalendarView.tsx
  *
- * - Número do dia em cada célula (26×26px)
- * - Grid responsivo: 4 → 3 → 2 → 1 colunas via ResizeObserver
- * - Dropdown "Partilhar": Copiar imagem / Baixar PNG
+ * - Vista por ano completo (12 meses, 3 colunas)
+ * - Cores: verde #1F3D2B (streak), vermelho #C44536 (recaída), cinza (vazio)
+ * - Tipografia Inter
+ * - Todos os textos via useI18n() → t.calendar.*
+ * - Share/download mantido com textos traduzidos
  */
 
 import React, { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { ChallengeData } from "../lib/ipc";
+import { useI18n } from "../lib/i18n";
 
 interface Props {
   challenges: ChallengeData[];
@@ -32,15 +36,15 @@ function buildDayMap(challenges: ChallengeData[]): Map<string, DayInfo> {
     while (cursor < endB) {
       const key = toDateKey(cursor);
       if (!map.has(key) || map.get(key)!.state !== "relapse")
-        map.set(key, { state: "streak", challengeId: c.id, tooltip: `Streak — ${c.durationDays} dias` });
+        map.set(key, { state: "streak", challengeId: c.id });
       cursor = addDays(cursor, 1);
     }
-    if (c.cancelledAt) map.set(toDateKey(startOfDay(c.cancelledAt)), { state: "relapse", challengeId: c.id, tooltip: "Recaída" });
+    if (c.cancelledAt) map.set(toDateKey(startOfDay(c.cancelledAt)), { state: "relapse", challengeId: c.id });
   }
   return map;
 }
 
-// ── Calendar grid ─────────────────────────────────────────────────────────────
+// ── Month grid ────────────────────────────────────────────────────────────────
 
 interface MonthData { year: number; month: number; weeks: (Date | null)[][]; }
 
@@ -58,42 +62,35 @@ function buildMonth(year: number, month: number): MonthData {
   return { year, month, weeks };
 }
 
-const MONTH_SHORT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
-const DOW_LABELS  = ["S","T","Q","Q","S","S","D"];
-const CELL = 26;
-const GAP  = 3;
+const CELL = 24;
+const GAP  = 2;
 
-// Width of one fully-rendered month column (7 cells + 6 gaps + some breathing room)
-// 7*26 + 6*3 = 182 + some label padding ≈ 190
-const MONTH_COL_WIDTH = 192;
+// Month short names — localised via locale, but we keep a static fallback
+const MONTH_SHORT_KEYS = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"] as const;
 
-// ── Responsive column count ───────────────────────────────────────────────────
+// DOW: Mon→Sun (ISO week)
+const DOW_LABELS = ["S","T","Q","Q","S","S","D"];
+
+// ── Responsive columns ────────────────────────────────────────────────────────
 
 function useColumns(containerRef: React.RefObject<HTMLDivElement | null>): number {
-  const [cols, setCols] = useState(4);
-
+  const [cols, setCols] = useState(3);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-
+    const MONTH_W = 7 * (CELL + GAP) + 16; // ~200px
     const update = (w: number) => {
-      // padding 24px each side = 48px total
-      const available = w - 48;
-      if (available >= MONTH_COL_WIDTH * 4 + 32 * 3) setCols(4);
-      else if (available >= MONTH_COL_WIDTH * 3 + 32 * 2) setCols(3);
-      else if (available >= MONTH_COL_WIDTH * 2 + 32) setCols(2);
+      const avail = w - 32;
+      if      (avail >= MONTH_W * 4 + 32 * 3) setCols(4);
+      else if (avail >= MONTH_W * 3 + 32 * 2) setCols(3);
+      else if (avail >= MONTH_W * 2 + 32)     setCols(2);
       else setCols(1);
     };
-
     update(el.offsetWidth);
-
-    const ro = new ResizeObserver(entries => {
-      for (const entry of entries) update(entry.contentRect.width);
-    });
+    const ro = new ResizeObserver(entries => { for (const e of entries) update(e.contentRect.width); });
     ro.observe(el);
     return () => ro.disconnect();
   }, [containerRef]);
-
   return cols;
 }
 
@@ -103,10 +100,16 @@ function Tooltip({ text, x, y }: { text: string; x: number; y: number }) {
   return (
     <div style={{
       position: "fixed", left: x + 12, top: y - 8,
-      background: "var(--gray-800)", color: "var(--white)",
-      fontSize: "10px", letterSpacing: "0.06em",
-      padding: "5px 10px", borderRadius: "3px",
-      pointerEvents: "none", zIndex: 999, whiteSpace: "nowrap",
+      background: "#1C1C1C",
+      color: "#F7F9F8",
+      fontSize: "11px",
+      fontFamily: "Inter, system-ui, sans-serif",
+      padding: "5px 10px",
+      borderRadius: "4px",
+      pointerEvents: "none",
+      zIndex: 999,
+      whiteSpace: "nowrap",
+      boxShadow: "0 2px 8px rgba(0,0,0,.2)",
     }}>{text}</div>
   );
 }
@@ -114,7 +117,8 @@ function Tooltip({ text, x, y }: { text: string; x: number; y: number }) {
 // ── Day cell ──────────────────────────────────────────────────────────────────
 
 function DayCell({ date, dayInfo, onHover, onLeave }: {
-  date: Date | null; dayInfo: DayInfo | undefined;
+  date: Date | null;
+  dayInfo: DayInfo | undefined;
   onHover: (e: React.MouseEvent, info: DayInfo, date: Date) => void;
   onLeave: () => void;
 }) {
@@ -123,20 +127,45 @@ function DayCell({ date, dayInfo, onHover, onLeave }: {
   const state   = dayInfo?.state ?? "empty";
   const isToday = toDateKey(date) === toDateKey(new Date());
 
-  const bg         = state === "streak" ? "var(--green)" : state === "relapse" ? "var(--red-muted)" : "var(--gray-200)";
-  const textColor  = state !== "empty" ? "rgba(255,255,255,0.9)" : "var(--gray-400)";
+  const bg =
+    state === "streak"  ? "#1F3D2B" :
+    state === "relapse" ? "#FDECEA" :
+    "#EEF2EF";
+
+  const border =
+    state === "relapse" ? "1px solid #f5c5c0" :
+    state === "empty"   ? "1px solid #E4EBE7" :
+    "none";
+
+  const textColor =
+    state === "streak"  ? "rgba(255,255,255,.85)" :
+    state === "relapse" ? "#C44536" :
+    "#B0BCB5";
 
   return (
     <div
       onMouseEnter={dayInfo ? (e) => onHover(e, dayInfo, date) : undefined}
       onMouseLeave={dayInfo ? onLeave : undefined}
       style={{
-        width: CELL, height: CELL, borderRadius: 4, background: bg, flexShrink: 0,
+        width: CELL, height: CELL, flexShrink: 0,
         display: "flex", alignItems: "center", justifyContent: "center",
-        outline: isToday ? "2px solid var(--gray-600)" : "none", outlineOffset: "1px",
+        background: bg,
+        border: isToday ? "2px solid #1F3D2B" : border,
+        borderRadius: "4px",
+        outline: isToday && state !== "streak" ? "2px solid #1F3D2B" : "none",
+        outlineOffset: "1px",
+        transition: "opacity .12s",
+        cursor: dayInfo ? "default" : "default",
       }}
     >
-      <span style={{ fontSize: "8px", fontFamily: "var(--mono)", color: textColor, lineHeight: 1, userSelect: "none" }}>
+      <span style={{
+        fontSize: "8px",
+        fontFamily: "Inter, system-ui, sans-serif",
+        fontWeight: state === "streak" ? 600 : 400,
+        color: textColor,
+        lineHeight: 1,
+        userSelect: "none",
+      }}>
         {date.getDate()}
       </span>
     </div>
@@ -145,28 +174,53 @@ function DayCell({ date, dayInfo, onHover, onLeave }: {
 
 // ── Month block ───────────────────────────────────────────────────────────────
 
-function MonthBlock({ monthData, dayMap, onHover, onLeave }: {
-  monthData: MonthData; dayMap: Map<string, DayInfo>;
+function MonthBlock({ monthData, dayMap, monthLabel, onHover, onLeave }: {
+  monthData: MonthData;
+  dayMap: Map<string, DayInfo>;
+  monthLabel: string;
   onHover: (e: React.MouseEvent, info: DayInfo, date: Date) => void;
   onLeave: () => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: GAP }}>
-      <p style={{ fontSize: "9px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--gray-400)", marginBottom: 3, fontFamily: "var(--mono)" }}>
-        {MONTH_SHORT[monthData.month]}
+      <p style={{
+        fontSize: "9px", fontWeight: 600,
+        letterSpacing: ".12em", textTransform: "uppercase",
+        color: "#6B8F7A",
+        marginBottom: 5,
+        fontFamily: "Inter, system-ui, sans-serif",
+      }}>
+        {monthLabel}
       </p>
-      <div style={{ display: "flex", gap: GAP }}>
+      {/* DOW row */}
+      <div style={{ display: "flex", gap: GAP, marginBottom: 2 }}>
         {DOW_LABELS.map((l, i) => (
-          <div key={i} style={{ width: CELL, height: 12, fontSize: "7px", color: "var(--gray-400)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--mono)", flexShrink: 0 }}>
+          <div key={i} style={{
+            width: CELL, height: 10,
+            fontSize: "7px", fontWeight: 500,
+            color: "#B0BCB5",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontFamily: "Inter, system-ui, sans-serif",
+            flexShrink: 0,
+          }}>
             {l}
           </div>
         ))}
       </div>
+      {/* Weeks */}
       {monthData.weeks.map((week, wi) => (
         <div key={wi} style={{ display: "flex", gap: GAP }}>
           {week.map((day, di) => {
             const key = day ? toDateKey(day) : null;
-            return <DayCell key={di} date={day} dayInfo={key ? dayMap.get(key) : undefined} onHover={onHover} onLeave={onLeave} />;
+            return (
+              <DayCell
+                key={di}
+                date={day}
+                dayInfo={key ? dayMap.get(key) : undefined}
+                onHover={onHover}
+                onLeave={onLeave}
+              />
+            );
           })}
         </div>
       ))}
@@ -179,20 +233,47 @@ function MonthBlock({ monthData, dayMap, onHover, onLeave }: {
 function YearSelector({ year, availableYears, onChange }: {
   year: number; availableYears: number[]; onChange: (y: number) => void;
 }) {
+  const btnStyle: React.CSSProperties = {
+    width: 26, height: 26,
+    background: "transparent",
+    border: "1px solid #C8D8CE",
+    borderRadius: "4px",
+    color: "#6B6B6B",
+    fontFamily: "Inter, system-ui, sans-serif",
+    fontSize: "12px",
+    cursor: "pointer",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    lineHeight: 1,
+    transition: "border-color .15s",
+  };
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <button onClick={() => onChange(year - 1)} disabled={!availableYears.includes(year - 1)} style={navBtn}>←</button>
-      <span style={{ fontSize: "11px", color: "var(--gray-800)", fontFamily: "var(--mono)", letterSpacing: "0.1em", minWidth: 36, textAlign: "center" }}>{year}</span>
-      <button onClick={() => onChange(year + 1)} disabled={!availableYears.includes(year + 1)} style={navBtn}>→</button>
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <button
+        onClick={() => onChange(year - 1)}
+        disabled={!availableYears.includes(year - 1)}
+        style={{ ...btnStyle, opacity: availableYears.includes(year - 1) ? 1 : .35 }}
+      >
+        ‹
+      </button>
+      <span style={{
+        fontSize: "13px", fontWeight: 600,
+        color: "#1C1C1C",
+        fontFamily: "Inter, system-ui, sans-serif",
+        letterSpacing: "-.2px",
+        minWidth: 36, textAlign: "center",
+      }}>
+        {year}
+      </span>
+      <button
+        onClick={() => onChange(year + 1)}
+        disabled={!availableYears.includes(year + 1)}
+        style={{ ...btnStyle, opacity: availableYears.includes(year + 1) ? 1 : .35 }}
+      >
+        ›
+      </button>
     </div>
   );
 }
-
-const navBtn: React.CSSProperties = {
-  background: "none", border: "1px solid var(--gray-200)", borderRadius: 3,
-  color: "var(--gray-600)", fontFamily: "var(--mono)", fontSize: "11px",
-  padding: "3px 8px", cursor: "pointer", lineHeight: 1.4,
-};
 
 // ── Year stats ────────────────────────────────────────────────────────────────
 
@@ -216,58 +297,51 @@ function useYearStats(challenges: ChallengeData[], year: number) {
 
 async function buildExportCanvas(
   calendarEl: HTMLElement,
-  year: number, streakDays: number, relapses: number, bestStreak: number,
+  year: number, streakDays: number, relapses: number,
+  bestStreak: number,
+  streakLabel: string, relapsesLabel: string, disciplineLabel: string,
 ): Promise<HTMLCanvasElement> {
   const html2canvas = (await import("html2canvas")).default;
-
   const wrapper = document.createElement("div");
   Object.assign(wrapper.style, {
     position: "fixed", top: "-9999px", left: "-9999px",
-    background: "#ffffff", padding: "36px 40px 32px",
-    fontFamily: "'DM Mono','Courier New',monospace",
+    background: "#F7F9F8",
+    padding: "36px 40px 32px",
+    fontFamily: "Inter, system-ui, sans-serif",
     width: (calendarEl.offsetWidth + 80) + "px",
     boxSizing: "border-box",
   });
-
   wrapper.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:22px;">
       <div>
-        <div style="font-family:'DM Serif Display',Georgia,serif;font-size:24px;color:#1a3d2b;font-weight:400;line-height:1;margin-bottom:6px;">Quit</div>
-        <div style="font-size:9px;letter-spacing:0.18em;text-transform:uppercase;color:#9a9a94;">${year}</div>
+        <div style="font-size:22px;font-weight:700;color:#1F3D2B;line-height:1;margin-bottom:6px;letter-spacing:-.5px;">Quit</div>
+        <div style="font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#6B8F7A;">${year} · ${disciplineLabel}</div>
       </div>
       ${bestStreak > 0 ? `
       <div style="text-align:right;">
-        <div style="font-family:'DM Serif Display',Georgia,serif;font-size:32px;color:#1a3d2b;line-height:1;">${bestStreak}</div>
-        <div style="font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:#9a9a94;margin-top:3px;">melhor streak</div>
+        <div style="font-size:34px;font-weight:700;color:#1F3D2B;line-height:1;">${bestStreak}</div>
+        <div style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6B6B6B;margin-top:4px;">best streak</div>
       </div>` : ""}
     </div>
-    <div style="display:flex;gap:24px;margin-bottom:20px;align-items:center;">
-      <div style="display:flex;align-items:center;gap:7px;">
-        <div style="width:10px;height:10px;border-radius:2px;background:#1a3d2b;flex-shrink:0;"></div>
-        <span style="font-size:11px;color:#9a9a94;font-family:'DM Mono',monospace;">
-          <span style="color:#2a2a26;font-weight:500;">${streakDays}</span> dias de streak
-        </span>
+    <div style="display:flex;gap:20px;margin-bottom:20px;align-items:center;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="width:10px;height:10px;background:#1F3D2B;border-radius:2px;flex-shrink:0;"></div>
+        <span style="font-size:11px;color:#6B6B6B;"><span style="color:#1C1C1C;font-weight:600;">${streakDays}</span> ${streakLabel}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:7px;">
-        <div style="width:10px;height:10px;border-radius:2px;background:#c0392b;flex-shrink:0;"></div>
-        <span style="font-size:11px;color:#9a9a94;font-family:'DM Mono',monospace;">
-          <span style="color:#2a2a26;font-weight:500;">${relapses}</span> recaída${relapses !== 1 ? "s" : ""}
-        </span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="width:10px;height:10px;background:#FDECEA;border:1px solid #f5c5c0;border-radius:2px;flex-shrink:0;"></div>
+        <span style="font-size:11px;color:#6B6B6B;"><span style="color:#C44536;font-weight:600;">${relapses}</span> ${relapsesLabel}</span>
       </div>
     </div>
   `;
-
   const clone = calendarEl.cloneNode(true) as HTMLElement;
   Object.assign(clone.style, { padding: "0", border: "none", background: "transparent", boxShadow: "none" });
-  // Hide controls row (first child = header with buttons/year selector)
   const firstChild = clone.firstElementChild as HTMLElement | null;
   if (firstChild) firstChild.style.display = "none";
-
   wrapper.appendChild(clone);
   document.body.appendChild(wrapper);
-
   try {
-    return await html2canvas(wrapper, { backgroundColor: "#ffffff", scale: 2, useCORS: true, logging: false });
+    return await html2canvas(wrapper, { backgroundColor: "#F7F9F8", scale: 2, useCORS: true, logging: false });
   } finally {
     document.body.removeChild(wrapper);
   }
@@ -277,10 +351,8 @@ async function copyImageToClipboard(canvas: HTMLCanvasElement): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     canvas.toBlob(async (blob) => {
       if (!blob) { reject(new Error("blob null")); return; }
-      try {
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-        resolve();
-      } catch (e) { reject(e); }
+      try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); resolve(); }
+      catch (e) { reject(e); }
     }, "image/png");
   });
 }
@@ -290,7 +362,7 @@ async function downloadImage(canvas: HTMLCanvasElement, year: number): Promise<v
     canvas.toBlob((blob) => {
       if (!blob) { resolve(); return; }
       const url = URL.createObjectURL(blob);
-      const a   = document.createElement("a");
+      const a = document.createElement("a");
       a.href = url; a.download = `quit-${year}.png`; a.click();
       URL.revokeObjectURL(url);
       resolve();
@@ -303,73 +375,77 @@ async function downloadImage(canvas: HTMLCanvasElement, year: number): Promise<v
 type ShareAction = "copy" | "download";
 type ShareState  = "idle" | "loading" | "done" | "error";
 
-function ShareDropdown({ onAction, disabled }: {
+function ShareDropdown({ onAction, disabled, shareLabel, copyLabel, downloadLabel }: {
   onAction: (action: ShareAction) => void;
   disabled: boolean;
+  shareLabel: string;
+  copyLabel: string;
+  downloadLabel: string;
 }) {
   const [open, setOpen] = useState(false);
-  const ref             = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
   }, [open]);
+
+  const btnStyle: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: "6px",
+    padding: "5px 11px",
+    border: "1px solid #C8D8CE",
+    borderRadius: "4px",
+    fontFamily: "Inter, system-ui, sans-serif",
+    fontSize: "10px", fontWeight: 600,
+    letterSpacing: ".07em", textTransform: "uppercase",
+    color: "#6B6B6B",
+    background: "transparent",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? .5 : 1,
+    transition: "border-color .15s",
+  };
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <button
-        onClick={() => !disabled && setOpen(o => !o)}
-        disabled={disabled}
-        style={{
-          display: "flex", alignItems: "center", gap: "6px",
-          padding: "6px 12px",
-          border: "1px solid var(--gray-200)",
-          borderRadius: "var(--radius-sm)",
-          fontFamily: "var(--mono)", fontSize: "10px", letterSpacing: "0.08em",
-          color: "var(--gray-600)", background: "transparent",
-          cursor: disabled ? "not-allowed" : "pointer",
-          opacity: disabled ? 0.5 : 1,
-          transition: "all 0.15s",
-        }}
-      >
+      <button onClick={() => !disabled && setOpen(o => !o)} disabled={disabled} style={btnStyle}>
         <span style={{ fontSize: "11px", lineHeight: 1 }}>⎘</span>
-        Partilhar
-        <span style={{ fontSize: "8px", lineHeight: 1, opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
+        {shareLabel}
+        <span style={{ fontSize: "7px", opacity: .6 }}>{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
         <div style={{
-          position: "absolute", top: "calc(100% + 4px)", right: 0,
-          background: "var(--white)",
-          border: "1px solid var(--gray-200)",
-          borderRadius: "var(--radius-sm)",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-          minWidth: "160px", zIndex: 50,
+          position: "absolute", top: "calc(100% + 6px)", right: 0,
+          background: "#fff",
+          border: "1px solid #E4EBE7",
+          borderRadius: "5px",
+          boxShadow: "0 4px 16px rgba(0,0,0,.08)",
+          minWidth: "160px",
+          zIndex: 50,
           overflow: "hidden",
         }}>
           {([
-            { action: "copy"     as ShareAction, icon: "⎘", label: "Copiar imagem" },
-            { action: "download" as ShareAction, icon: "↓", label: "Baixar PNG"    },
-          ] as const).map(({ action, icon, label }) => (
+            { action: "copy"     as ShareAction, icon: "⎘", label: copyLabel     },
+            { action: "download" as ShareAction, icon: "↓", label: downloadLabel },
+          ]).map(({ action, icon, label }) => (
             <div
               key={action}
               onClick={() => { setOpen(false); onAction(action); }}
               style={{
                 display: "flex", alignItems: "center", gap: "10px",
-                padding: "10px 14px", cursor: "pointer",
-                fontSize: "11px", color: "var(--gray-700)",
-                fontFamily: "var(--mono)", letterSpacing: "0.06em",
-                transition: "background 0.1s",
+                padding: "10px 14px",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontFamily: "Inter, system-ui, sans-serif",
+                color: "#1C1C1C",
+                transition: "background .1s",
               }}
-              onMouseEnter={e => (e.currentTarget.style.background = "var(--gray-50)")}
-              onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#F7F9F8"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
             >
-              <span style={{ fontSize: "13px", lineHeight: 1, color: "var(--gray-400)" }}>{icon}</span>
+              <span style={{ fontSize: "13px", lineHeight: 1, color: "#6B8F7A" }}>{icon}</span>
               {label}
             </div>
           ))}
@@ -379,10 +455,61 @@ function ShareDropdown({ onAction, disabled }: {
   );
 }
 
+// ── Legend item ───────────────────────────────────────────────────────────────
+
+function LegendItem({ bg, border, label }: { bg: string; border?: string; label: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div style={{
+        width: 10, height: 10, flexShrink: 0,
+        background: bg,
+        border: border || "none",
+        borderRadius: "2px",
+      }} />
+      <span style={{
+        fontSize: "10px",
+        color: "#6B6B6B",
+        fontFamily: "Inter, system-ui, sans-serif",
+      }}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
+// ── Stat pill ─────────────────────────────────────────────────────────────────
+
+function StatPill({ value, label, isStreak }: { value: number; label: string; isStreak: boolean }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{
+        width: 10, height: 10, flexShrink: 0, borderRadius: "2px",
+        background: isStreak ? "#1F3D2B" : "#FDECEA",
+        border: isStreak ? "none" : "1px solid #f5c5c0",
+      }} />
+      <span style={{ fontSize: "12px", color: "#6B6B6B", fontFamily: "Inter, system-ui, sans-serif" }}>
+        <span style={{ color: isStreak ? "#1F3D2B" : "#C44536", fontWeight: 600 }}>{value}</span>
+        {" "}{label}
+      </span>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function CalendarView({ challenges, bestStreak = 0 }: Props) {
+  const { t, lang } = useI18n();
+  const tc = t.calendar;
   const today = new Date();
+
+  // Month labels localised
+  const MONTH_SHORT = useMemo(() =>
+    Array.from({ length: 12 }, (_, m) =>
+      new Date(2024, m, 1).toLocaleString(lang === "pt" ? "pt-PT" : lang === "es" ? "es-ES" : lang === "fr" ? "fr-FR" : lang === "it" ? "it-IT" : "en-GB", { month: "short" })
+        .replace(".", "")
+        .toUpperCase()
+    )
+  , [lang]);
 
   const availableYears = useMemo(() => {
     const years = new Set<number>([today.getFullYear()]);
@@ -394,10 +521,10 @@ export function CalendarView({ challenges, bestStreak = 0 }: Props) {
     return Array.from(years).sort((a, b) => a - b);
   }, [challenges]);
 
-  const [year, setYear]           = useState(() => availableYears[availableYears.length - 1] ?? today.getFullYear());
+  const [year,       setYear]       = useState(() => availableYears[availableYears.length - 1] ?? today.getFullYear());
   const [shareState, setShareState] = useState<ShareState>("idle");
-  const [shareMsg, setShareMsg]     = useState("");
-  const [tooltip, setTooltip]       = useState<{ text: string; x: number; y: number } | null>(null);
+  const [shareMsg,   setShareMsg]   = useState("");
+  const [tooltip,    setTooltip]    = useState<{ text: string; x: number; y: number } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const cols         = useColumns(containerRef);
@@ -417,81 +544,91 @@ export function CalendarView({ challenges, bestStreak = 0 }: Props) {
   const { streakDays, relapses } = useYearStats(yearChallenges, year);
 
   function handleHover(e: React.MouseEvent, info: DayInfo, date: Date) {
-    const label = date.toLocaleDateString("pt-PT", { day: "numeric", month: "long", year: "numeric" });
-    setTooltip({ text: `${label} — ${info.tooltip}`, x: e.clientX, y: e.clientY });
+    const locale = lang === "pt" ? "pt-PT" : lang === "es" ? "es-ES" : lang === "fr" ? "fr-FR" : lang === "it" ? "it-IT" : "en-GB";
+    const label = date.toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" });
+    const stateLabel = info.state === "streak" ? tc.streakDay : tc.relapse;
+    setTooltip({ text: `${label} — ${stateLabel}`, x: e.clientX, y: e.clientY });
   }
 
   async function handleShare(action: ShareAction) {
     if (!containerRef.current) return;
     setShareState("loading");
     setShareMsg("");
-
     try {
-      const canvas = await buildExportCanvas(containerRef.current, year, streakDays, relapses, bestStreak);
-
+      const canvas = await buildExportCanvas(
+        containerRef.current, year, streakDays, relapses, bestStreak,
+        tc.streakDays, tc.relapses, tc.disciplineDays,
+      );
       if (action === "copy") {
-        try {
-          await copyImageToClipboard(canvas);
-          setShareMsg("Copiado ✓");
-        } catch {
-          // Clipboard failed — fallback to download silently
-          await downloadImage(canvas, year);
-          setShareMsg("Baixado ✓");
-        }
+        try { await copyImageToClipboard(canvas); setShareMsg(tc.copied); }
+        catch { await downloadImage(canvas, year); setShareMsg(tc.downloaded); }
       } else {
         await downloadImage(canvas, year);
-        setShareMsg("Baixado ✓");
+        setShareMsg(tc.downloaded);
       }
-
       setShareState("done");
       setTimeout(() => { setShareState("idle"); setShareMsg(""); }, 2500);
     } catch {
       setShareState("error");
-      setShareMsg("Erro — tenta novamente");
+      setShareMsg(tc.shareError);
       setTimeout(() => { setShareState("idle"); setShareMsg(""); }, 3000);
     }
   }
 
-  // Gap between columns adapts to available space
-  const colGap = cols >= 3 ? "28px 32px" : cols === 2 ? "24px 28px" : "20px";
+  const colGap = cols >= 3 ? "24px 28px" : cols === 2 ? "20px 24px" : "20px";
 
   return (
-    <div ref={containerRef} style={containerStyle}>
+    <div ref={containerRef} style={{ position: "relative" }}>
 
       {/* ── Header ── */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
-        <div>
-          <p style={sectionLabel}>Calendário</p>
-          <div style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
-            <StatPill label="dias de streak" value={streakDays} color="var(--green)" />
-            <StatPill label="recaídas"       value={relapses}   color="var(--red-muted)" />
-          </div>
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        marginBottom: 16, gap: 12, flexWrap: "wrap",
+      }}>
+        {/* Stats */}
+        <div style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
+          <StatPill value={streakDays} label={tc.streakDays} isStreak />
+          <StatPill value={relapses}  label={tc.relapses}   isStreak={false} />
         </div>
+        {/* Controls */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          {/* Feedback label */}
           {shareMsg && (
             <span style={{
-              fontSize: "10px", fontFamily: "var(--mono)",
-              color: shareState === "error" ? "var(--red-muted)" : "var(--green)",
-              letterSpacing: "0.06em",
+              fontSize: "11px",
+              fontFamily: "Inter, system-ui, sans-serif",
+              color: shareState === "error" ? "#C44536" : "#1F3D2B",
+              letterSpacing: ".04em",
             }}>
               {shareMsg}
             </span>
           )}
-          <ShareDropdown onAction={handleShare} disabled={shareState === "loading"} />
+          <ShareDropdown
+            onAction={handleShare}
+            disabled={shareState === "loading"}
+            shareLabel={tc.share}
+            copyLabel={tc.copyImage}
+            downloadLabel={tc.downloadPng}
+          />
           <YearSelector year={year} availableYears={availableYears} onChange={setYear} />
         </div>
       </div>
 
       {/* ── Legend ── */}
       <div style={{ display: "flex", gap: 14, marginBottom: 20, alignItems: "center", flexWrap: "wrap" }}>
-        <LegendItem color="var(--green)"     label="Dia de streak" />
-        <LegendItem color="var(--red-muted)" label="Recaída" />
-        <LegendItem color="var(--gray-200)"  label="Sem registo" />
-        <span style={{ fontSize: "9px", color: "var(--gray-400)", fontFamily: "var(--mono)", opacity: 0.7 }}>· hoje com contorno</span>
+        <LegendItem bg="#1F3D2B" label={tc.streakDay} />
+        <LegendItem bg="#FDECEA" border="1px solid #f5c5c0" label={tc.relapse} />
+        <LegendItem bg="#EEF2EF" border="1px solid #E4EBE7" label={tc.noRecord} />
+        <span style={{
+          fontSize: "10px",
+          color: "#B0BCB5",
+          fontFamily: "Inter, system-ui, sans-serif",
+          marginLeft: 2,
+        }}>
+          {tc.todayOutline}
+        </span>
       </div>
 
-      {/* ── Month grid — responsive columns ── */}
+      {/* ── Month grid ── */}
       <div style={{
         display: "grid",
         gridTemplateColumns: `repeat(${cols}, auto)`,
@@ -499,13 +636,26 @@ export function CalendarView({ challenges, bestStreak = 0 }: Props) {
         justifyContent: "start",
       }}>
         {months.map((m) => (
-          <MonthBlock key={m.month} monthData={m} dayMap={dayMap} onHover={handleHover} onLeave={() => setTooltip(null)} />
+          <MonthBlock
+            key={m.month}
+            monthData={m}
+            dayMap={dayMap}
+            monthLabel={MONTH_SHORT[m.month]}
+            onHover={handleHover}
+            onLeave={() => setTooltip(null)}
+          />
         ))}
       </div>
 
       {yearChallenges.length === 0 && (
-        <p style={{ fontSize: "11px", color: "var(--gray-400)", marginTop: 16, fontFamily: "var(--mono)" }}>
-          Nenhum desafio em {year}.
+        <p style={{
+          fontSize: "13px",
+          color: "#6B6B6B",
+          fontFamily: "Inter, system-ui, sans-serif",
+          fontStyle: "italic",
+          marginTop: 16,
+        }}>
+          {tc.noChallenges(year)}
         </p>
       )}
 
@@ -513,38 +663,3 @@ export function CalendarView({ challenges, bestStreak = 0 }: Props) {
     </div>
   );
 }
-
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-function StatPill({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <div style={{ width: 8, height: 8, borderRadius: 2, background: color, opacity: 0.85, flexShrink: 0 }} />
-      <span style={{ fontSize: "10px", color: "var(--gray-400)", fontFamily: "var(--mono)" }}>
-        <span style={{ color: "var(--gray-800)", fontWeight: 500 }}>{value}</span>{" "}{label}
-      </span>
-    </div>
-  );
-}
-
-function LegendItem({ color, label }: { color: string; label: string }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-      <div style={{ width: 10, height: 10, borderRadius: 2, background: color, opacity: color === "var(--gray-200)" ? 0.8 : 0.85, flexShrink: 0 }} />
-      <span style={{ fontSize: "9px", color: "var(--gray-400)", fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>{label}</span>
-    </div>
-  );
-}
-
-const containerStyle: React.CSSProperties = {
-  padding: "20px 24px",
-  border: "1px solid var(--gray-200)",
-  borderRadius: "var(--radius-md)",
-  background: "var(--gray-50)",
-  position: "relative",
-};
-
-const sectionLabel: React.CSSProperties = {
-  fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase",
-  color: "var(--gray-400)", fontFamily: "var(--mono)", marginBottom: 6,
-};

@@ -1,497 +1,234 @@
+/**
+ * HistoryScreen.tsx — Quit design system
+ * Localização: src/renderer/screens/HistoryScreen.tsx
+ */
+
 import React, { useEffect, useState } from "react";
 import { ipc, ChallengeData } from "../lib/ipc";
 import { Sidebar } from "../components/Sidebar";
 import { AppScreen } from "../App";
 import { CalendarView } from "../components/CalendarView";
+import { useI18n } from "../lib/i18n";
 
-interface Props {
-  onNavigate: (screen: AppScreen) => void;
-}
+interface Props { onNavigate: (screen: AppScreen) => void; }
 
 type StatusKey = "completed" | "cancelled" | "active";
 
-const STATUS_LABEL: Record<StatusKey, string> = {
-  completed: "Completado",
-  cancelled: "Recaída",
-  active: "Ativo",
-};
-
-const STATUS_COLOR: Record<StatusKey, string> = {
-  completed: "var(--green)",
-  cancelled: "var(--red-muted)",
-  active: "var(--gray-400)",
-};
-
-const STATUS_BG: Record<StatusKey, string> = {
-  completed: "var(--green-subtle)",
-  cancelled: "#fdf0f0",
-  active: "var(--gray-100)",
-};
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("pt-PT", {
-    day: "numeric", month: "short", year: "numeric",
-  });
+function formatDate(iso: string, lang: string) {
+  const locale = lang === "pt" ? "pt-PT" : lang === "es" ? "es-ES" : lang === "fr" ? "fr-FR" : lang === "it" ? "it-IT" : "en-GB";
+  return new Date(iso).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
 }
 
-// ── Best streak helpers ────────────────────────────────────────────────────────
-
-/**
- * Returns the true days elapsed, frozen at the moment the challenge ended.
- * The backend's daysElapsed is calculated from `now - startedAt`, so a
- * challenge cancelled on day 1 that started 8 days ago incorrectly shows 8.
- * We recalculate using cancelledAt / completedAt as the end boundary.
- */
 function frozenDays(c: ChallengeData): number {
-  const start = new Date(c.startedAt).getTime();
+  const start  = new Date(c.startedAt).getTime();
   const endIso = c.cancelledAt ?? c.completedAt ?? null;
-  // Active challenges: use live elapsed from backend
   if (!endIso) return c.progress.daysElapsed;
-  const end = new Date(endIso).getTime();
-  return Math.min(
-    c.durationDays,
-    Math.max(0, Math.floor((end - start) / 86_400_000)),
-  );
+  return Math.min(c.durationDays, Math.max(0, Math.floor((new Date(endIso).getTime() - start) / 86_400_000)));
 }
 
-function getBestStreak(challenges: ChallengeData[]): number {
-  if (challenges.length === 0) return 0;
-  return Math.max(...challenges.map(c => frozenDays(c)));
-}
-
-function isBestStreak(challenge: ChallengeData, best: number): boolean {
-  return best > 0 && frozenDays(challenge) === best;
-}
+function getBestStreak(cs: ChallengeData[]) { return cs.length === 0 ? 0 : Math.max(...cs.map(frozenDays)); }
 
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
-function DetailPanel({
-  challenge,
-  isBest,
-  onClose,
-}: {
-  challenge: ChallengeData;
-  isBest: boolean;
-  onClose: () => void;
-}) {
-  const status  = challenge.status as StatusKey;
+function DetailPanel({ challenge, isBest, onClose, lang }: { challenge: ChallengeData; isBest: boolean; onClose: () => void; lang: string }) {
+  const { t } = useI18n();
+  const status = challenge.status as StatusKey;
+  const days   = frozenDays(challenge);
+
+  const badgeColor = status === "completed" ? "#1F3D2B" : status === "cancelled" ? "#C44536" : "#6B6B6B";
+  const badgeBg    = status === "completed" ? "#EBF2EE" : status === "cancelled" ? "#FDECEA" : "#F7F9F8";
+  const badgeLabel = status === "completed" ? t.history.victory : status === "cancelled" ? t.history.relapse : t.history.active;
+
+  const rows: { label: string; value: string }[] = [
+    { label: t.history.start,    value: formatDate(challenge.startedAt, lang) },
+    { label: t.history.duration, value: `${challenge.durationDays} ${t.common.days}` },
+    { label: t.history.daysMaintained, value: `${days} ${t.common.days}` },
+    ...(challenge.completedAt ? [{ label: t.history.completedOn, value: formatDate(challenge.completedAt, lang) }] : []),
+    ...(challenge.cancelledAt ? [{ label: t.history.relapseOn,   value: formatDate(challenge.cancelledAt,  lang) }] : []),
+    ...(!challenge.completedAt && !challenge.cancelledAt ? [{ label: t.history.expectedEnd, value: formatDate(challenge.endsAt, lang) }] : []),
+  ];
 
   return (
-    <div style={panelStyles.overlay} onClick={onClose}>
-      <div style={panelStyles.panel} onClick={e => e.stopPropagation()}>
-
-        {/* Header */}
-        <div style={panelStyles.header}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{
-              ...panelStyles.badge,
-              color: STATUS_COLOR[status],
-              background: STATUS_BG[status],
-            }}>
-              {STATUS_LABEL[status]}
-            </span>
-            {isBest && (
-              <span style={panelStyles.bestBadge}>
-                melhor streak
-              </span>
-            )}
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,.25)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300,
+    }} onClick={onClose}>
+      <div style={{
+        background: "#fff", border: "1px solid #E4EBE7", borderRadius: "10px",
+        padding: "28px 32px", maxWidth: "420px", width: "90%",
+        boxShadow: "0 8px 32px rgba(0,0,0,.1)",
+      }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "20px" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+              <span style={{ fontSize: "22px", fontWeight: 700, color: "#1C1C1C" }}>{days}</span>
+              <span style={{ fontSize: "13px", color: "#6B6B6B" }}>{t.history.detailDaysOf} {challenge.durationDays}</span>
+              {isBest && <span style={{ fontSize: "13px" }}>🏆</span>}
+            </div>
+            <span style={{ fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "99px", background: badgeBg, color: badgeColor }}>{badgeLabel}</span>
           </div>
-          <button onClick={onClose} style={panelStyles.closeBtn}>✕</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: "18px", color: "#6B6B6B", cursor: "pointer", lineHeight: 1 }}>×</button>
         </div>
 
-        {/* Big number */}
-        <div style={panelStyles.bigNum}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
-            <span style={{
-              ...panelStyles.bigNumValue,
-              color: isBest ? "var(--green)" : "var(--gray-800)",
-            }}>
-              {frozenDays(challenge)}
-            </span>
-            {isBest && (
-              <span style={{ fontSize: "20px", lineHeight: 1 }}>🏆</span>
-            )}
-          </div>
-          <span style={panelStyles.bigNumLabel}>
-            dias completados de {challenge.durationDays}
-          </span>
+        {/* Meta rows */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
+          {rows.map(r => (
+            <div key={r.label} style={{ display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
+              <span style={{ color: "#6B6B6B" }}>{r.label}</span>
+              <span style={{ fontWeight: 500, color: "#1C1C1C" }}>{r.value}</span>
+            </div>
+          ))}
         </div>
-
-        {/* Progress bar */}
-        <div style={{
-          height: "3px",
-          background: "var(--gray-200)",
-          borderRadius: "99px",
-          overflow: "hidden",
-          marginBottom: "28px",
-        }}>
-          <div style={{
-            height: "100%",
-            width: `${Math.min(challenge.progress.percentage, 100)}%`,
-            background: isBest ? "var(--green)" : STATUS_COLOR[status],
-            borderRadius: "99px",
-          }} />
-        </div>
-
-        {/* Details */}
-        <div style={panelStyles.details}>
-          <DetailRow label="Início"           value={formatDate(challenge.startedAt)} />
-          <DetailRow label="Fim previsto"      value={formatDate(challenge.endsAt)} />
-          {challenge.completedAt && (
-            <DetailRow label="Completado em" value={formatDate(challenge.completedAt)} highlight="green" />
-          )}
-          {challenge.cancelledAt && (
-            <DetailRow label="Recaída em" value={formatDate(challenge.cancelledAt)} highlight="red" />
-          )}
-          <DetailRow label="Duração definida" value={`${challenge.durationDays} dias`} />
-          <DetailRow label="Dias aguentou"    value={`${frozenDays(challenge)} dias`} />
-        </div>
-
-        <div style={panelStyles.divider} />
 
         {/* Reason */}
-        <div>
-          <p style={panelStyles.sectionLabel}>Motivo</p>
-          <p style={panelStyles.reasonText}>"{challenge.reason}"</p>
-        </div>
-
-        {/* Quit request info if cancelled */}
-        {challenge.status === "cancelled" && challenge.quitRequest && (
-          <>
-            <div style={panelStyles.divider} />
-            <div>
-              <p style={panelStyles.sectionLabel}>O que sentias</p>
-              <p style={panelStyles.reasonText}>"{challenge.quitRequest.feeling}"</p>
-            </div>
-          </>
+        {challenge.reason && (
+          <div style={{ padding: "10px 12px", background: "#F7F9F8", borderLeft: "2px solid #C8D8CE", borderRadius: "0 5px 5px 0", marginBottom: "8px" }}>
+            <div style={{ fontSize: "9px", fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: ".1em", color: "#6B6B6B", marginBottom: "4px" }}>{t.history.reasonLabel}</div>
+            <div style={{ fontSize: "12px", color: "#1C1C1C", fontStyle: "italic", lineHeight: 1.65 }}>"{challenge.reason}"</div>
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-function DetailRow({ label, value, highlight }: {
-  label: string;
-  value: string;
-  highlight?: "green" | "red";
-}) {
-  const valueColor = highlight === "green"
-    ? "var(--green)"
-    : highlight === "red"
-      ? "var(--red-muted)"
-      : "var(--gray-800)";
-  return (
-    <div style={{
-      display: "flex", justifyContent: "space-between", alignItems: "center",
-      padding: "10px 0", borderBottom: "1px solid var(--gray-200)",
-    }}>
-      <span style={{ fontSize: "11px", color: "var(--gray-400)", letterSpacing: "0.05em" }}>{label}</span>
-      <span style={{ fontSize: "12px", color: valueColor }}>{value}</span>
-    </div>
-  );
-}
-
-// ── Main screen ───────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 export function HistoryScreen({ onNavigate }: Props) {
-  const [challenges, setChallenges] = useState<ChallengeData[] | null>(null);
-  const [selected, setSelected]     = useState<ChallengeData | null>(null);
-  const [showCalendar, setShowCalendar] = useState(false);
+  const { t, lang } = useI18n();
+  const [challenges,  setChallenges]  = useState<ChallengeData[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [view,        setView]        = useState<"list" | "calendar">("list");
+  const [detail,      setDetail]      = useState<ChallengeData | null>(null);
 
   useEffect(() => {
-    ipc.challenge.history().then(res => {
-      const past = (res.challenges ?? []).filter(c => c.status !== "active");
-      setChallenges(past);
-    });
+    ipc.challenge.history().then(r => { setChallenges(r.challenges ?? []); setLoading(false); });
   }, []);
 
-  const best = challenges ? getBestStreak(challenges) : 0;
-  const bestChallenge = challenges?.find(c => isBestStreak(c, best)) ?? null;
+  const best = getBestStreak(challenges);
+
+  const statusLabel = (c: ChallengeData): string => {
+    if (c.status === "completed") return t.history.victory;
+    if (c.status === "cancelled") return t.history.relapse;
+    return t.history.active;
+  };
+
+  const badgeStyle = (c: ChallengeData): React.CSSProperties => {
+    if (c.status === "completed") return { background: "#EBF2EE", color: "#1F3D2B" };
+    if (c.status === "cancelled") return { background: "#FDECEA", color: "#C44536" };
+    return { background: "#F7F9F8", color: "#6B6B6B" };
+  };
 
   return (
-    <div style={{ height: "100vh", display: "flex", background: "var(--white)", overflow: "hidden" }}>
-      <div className="drag-region" style={{
-        position: "absolute", top: 0, left: 0, right: 0, height: "28px", zIndex: 10,
-      }} />
-
+    <div style={{ height: "100vh", display: "flex", background: "#F7F9F8", overflow: "hidden" }}>
+      <div className="drag-region" style={{ position: "absolute", top: 0, left: 0, right: 0, height: "28px", zIndex: 10 }} />
       <Sidebar active="history" onNavigate={onNavigate} />
 
-      {selected && (
-        <DetailPanel
-          challenge={selected}
-          isBest={isBestStreak(selected, best)}
-          onClose={() => setSelected(null)}
-        />
-      )}
+      <main style={{ flex: 1, padding: "40px 44px 32px", overflowY: "auto", display: "flex", flexDirection: "column" }}>
 
-      {showCalendar && challenges && (
-        <div
-          style={{
-            position: "fixed", inset: 0, zIndex: 150,
-            background: "rgba(0,0,0,0.08)",
-            backdropFilter: "blur(2px)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            padding: "32px 16px",
-            overflowY: "auto",
-          }}
-          onClick={() => setShowCalendar(false)}
-        >
-          <div
-            style={{
-              background: "var(--white)",
-              border: "1px solid var(--gray-200)",
-              borderRadius: "var(--radius-md)",
-              boxShadow: "0 8px 48px rgba(0,0,0,0.12)",
-              padding: "32px 36px",
-              width: "960px",
-              maxWidth: "95vw",
-              position: "relative",
-              margin: "auto",
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
-              <div>
-                <p style={{ fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase", color: "var(--gray-400)", marginBottom: "4px" }}>
-                  Histórico visual
-                </p>
-                <h2 style={{ fontFamily: "var(--serif)", fontSize: "22px", color: "var(--gray-800)", fontWeight: 400 }}>
-                  Calendário de actividade
-                </h2>
-              </div>
-              <button
-                onClick={() => setShowCalendar(false)}
-                style={{
-                  background: "none", border: "none",
-                  color: "var(--gray-400)", cursor: "pointer",
-                  fontSize: "16px", padding: "4px 8px",
-                  lineHeight: 1,
-                }}
-              >
-                ✕
-              </button>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "24px" }}>
+          <div>
+            <div style={{ fontSize: "10px", fontWeight: 600, letterSpacing: ".12em", textTransform: "uppercase" as const, color: "#6B8F7A", marginBottom: "6px" }}>
+              {t.history.eyebrow}
             </div>
-            <CalendarView challenges={challenges} bestStreak={best} />
+            <div style={{ fontSize: "28px", fontWeight: 700, letterSpacing: "-.5px", color: "#1C1C1C" }}>
+              {view === "calendar" ? t.history.calendarTitle : t.history.title}
+            </div>
           </div>
-        </div>
-      )}
-
-      <main style={{
-        flex: 1, padding: "52px 56px 40px",
-        display: "flex", flexDirection: "column", overflowY: "auto",
-      }}>
-        <p style={eyebrow}>Histórico</p>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0" }}>
-          <h1 style={headline}>Desafios anteriores.</h1>
-          {challenges && challenges.length > 0 && (
-            <button
-              onClick={() => setShowCalendar(true)}
-              style={{
-                display: "flex", alignItems: "center", gap: "6px",
-                padding: "7px 14px",
-                border: "1px solid var(--gray-200)",
-                borderRadius: "var(--radius-sm)",
-                fontFamily: "var(--mono)",
-                fontSize: "10px", letterSpacing: "0.1em",
-                textTransform: "uppercase",
-                color: "var(--gray-600)", background: "transparent",
-                cursor: "pointer", flexShrink: 0,
-                marginBottom: "4px",
-              }}
-            >
-              <span style={{ fontSize: "13px", lineHeight: 1 }}>📅</span>
-              Calendário
-            </button>
-          )}
+          <button
+            onClick={() => setView(v => v === "list" ? "calendar" : "list")}
+            style={{ padding: "7px 14px", border: "1.5px solid #C8D8CE", borderRadius: "5px", fontSize: "11px", fontWeight: 600, letterSpacing: ".06em", color: "#6B6B6B", background: "transparent", cursor: "pointer", transition: "all .15s" }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "#1F3D2B"; (e.currentTarget as HTMLElement).style.color = "#1F3D2B"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "#C8D8CE"; (e.currentTarget as HTMLElement).style.color = "#6B6B6B"; }}
+          >
+            {view === "list" ? t.history.calendarBtn : t.history.listBtn}
+          </button>
         </div>
 
-        <div style={{ height: "1px", background: "var(--gray-200)", margin: "24px 0 32px" }} />
+        <div style={{ height: "1px", background: "#E4EBE7", marginBottom: "24px" }} />
 
-        {challenges === null ? (
-          <p style={{ fontSize: "12px", color: "var(--gray-400)" }}>A carregar...</p>
+        {loading ? (
+          <p style={{ fontSize: "13px", color: "#6B6B6B" }}>{t.common.loading}</p>
+        ) : view === "calendar" ? (
+          <CalendarView challenges={challenges} bestStreak={best} />
         ) : challenges.length === 0 ? (
-          <div style={{ padding: "40px 0" }}>
-            <p style={{ fontSize: "12px", color: "var(--gray-400)", lineHeight: "1.8" }}>
-              Ainda não tens desafios concluídos.<br />
-              Completa o teu primeiro desafio para o veres aqui.
-            </p>
+          <div style={{ padding: "32px 0", textAlign: "center" as const }}>
+            <p style={{ fontSize: "14px", color: "#6B6B6B" }}>{t.history.empty}</p>
+            <button onClick={() => onNavigate("challenge")} style={{
+              marginTop: "16px", padding: "9px 18px", border: "none", borderRadius: "5px",
+              fontSize: "12px", fontWeight: 600, letterSpacing: ".07em", textTransform: "uppercase" as const,
+              color: "#fff", background: "#1F3D2B", cursor: "pointer",
+            }}>
+              {t.create.btn}
+            </button>
           </div>
         ) : (
           <>
-            {/* Best streak summary card */}
+            {/* Best streak */}
             {best > 0 && (
-              <div
-                style={{ ...bestCard, cursor: bestChallenge ? "pointer" : "default" }}
-                onClick={() => bestChallenge && setSelected(bestChallenge)}
-              >
+              <div style={{
+                background: "#fff", border: "1.5px solid #1F3D2B", borderRadius: "8px",
+                padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center",
+                marginBottom: "20px", boxShadow: "0 1px 3px rgba(0,0,0,.04)",
+              }}>
                 <div>
-                  <p style={bestCardLabel}>Melhor streak</p>
-                  <p style={bestCardDays}>
-                    {best} dia{best !== 1 ? "s" : ""}
-                  </p>
+                  <div style={{ fontSize: "10px", fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: ".1em", color: "#6B8F7A", marginBottom: "5px" }}>
+                    {t.history.bestStreak}
+                  </div>
+                  <div style={{ fontSize: "28px", fontWeight: 700, color: "#1F3D2B", letterSpacing: "-1px", lineHeight: 1 }}>
+                    {best} <span style={{ fontSize: "13px", fontWeight: 400, color: "#6B6B6B" }}>{t.common.days}</span>
+                  </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span style={{ fontSize: "28px", lineHeight: 1 }}>🏆</span>
-                  {bestChallenge && (
-                    <span style={{ fontSize: "12px", color: "var(--green)", opacity: 0.6 }}>→</span>
-                  )}
-                </div>
+                <span style={{ fontSize: "24px" }}>🏆</span>
               </div>
             )}
 
-            <div style={{ display: "flex", flexDirection: "column", maxWidth: "560px" }}>
-              {challenges.map((c, i) => (
-                <ChallengeRow
-                  key={c.id}
-                  challenge={c}
-                  isBest={isBestStreak(c, best)}
-                  isLast={i === challenges.length - 1}
-                  onClick={() => setSelected(c)}
-                />
-              ))}
+            {/* Challenge list */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+              {challenges.map(c => {
+                const days = frozenDays(c);
+                const b    = badgeStyle(c);
+                return (
+                  <div key={c.id} onClick={() => setDetail(c)} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "14px 0", borderBottom: "1px solid #E4EBE7", cursor: "pointer",
+                    transition: "padding-left .1s",
+                  }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.paddingLeft = "4px"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.paddingLeft = "0"; }}
+                  >
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "3px" }}>
+                        <span style={{ fontSize: "14px", fontWeight: 600, color: "#1C1C1C" }}>
+                          {days} / {c.durationDays} {t.common.days}
+                        </span>
+                        <span style={{ fontSize: "10px", fontWeight: 600, padding: "2px 8px", borderRadius: "99px", ...b }}>
+                          {statusLabel(c)}
+                        </span>
+                        {days === best && best > 0 && <span style={{ fontSize: "12px" }}>🏆</span>}
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#6B6B6B" }}>
+                        {formatDate(c.startedAt, lang)} → {formatDate(c.cancelledAt ?? c.completedAt ?? c.endsAt, lang)}
+                      </div>
+                    </div>
+                    <span style={{ color: "#C8D8CE", fontSize: "14px" }}>›</span>
+                  </div>
+                );
+              })}
             </div>
           </>
         )}
       </main>
+
+      {detail && (
+        <DetailPanel
+          challenge={detail}
+          isBest={frozenDays(detail) === best && best > 0}
+          onClose={() => setDetail(null)}
+          lang={lang}
+        />
+      )}
     </div>
   );
 }
-
-// ── List row ──────────────────────────────────────────────────────────────────
-
-function ChallengeRow({
-  challenge,
-  isBest,
-  isLast,
-  onClick,
-}: {
-  challenge: ChallengeData;
-  isBest: boolean;
-  isLast: boolean;
-  onClick: () => void;
-}) {
-  const status  = challenge.status as StatusKey;
-  const endDate = challenge.completedAt ?? challenge.cancelledAt ?? challenge.endsAt;
-
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "16px 0",
-        borderBottom: isLast ? "none" : "1px solid var(--gray-200)",
-        cursor: "pointer",
-        transition: "opacity 0.15s",
-      }}
-      onMouseEnter={e => (e.currentTarget.style.opacity = "0.7")}
-      onMouseLeave={e => (e.currentTarget.style.opacity = "1")}
-    >
-      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{ fontSize: "14px", color: isBest ? "var(--green)" : "var(--gray-800)", fontWeight: isBest ? 500 : 400 }}>
-            {frozenDays(challenge)} / {challenge.durationDays} dias
-          </span>
-          <span style={{
-            fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase",
-            color: STATUS_COLOR[status], background: STATUS_BG[status],
-            padding: "2px 8px", borderRadius: "99px",
-          }}>
-            {STATUS_LABEL[status]}
-          </span>
-          {isBest && (
-            <span style={{ fontSize: "13px", lineHeight: 1 }} title="Melhor streak">🏆</span>
-          )}
-        </div>
-        <span style={{ fontSize: "11px", color: "var(--gray-400)" }}>
-          {formatDate(challenge.startedAt)} → {formatDate(endDate)}
-        </span>
-      </div>
-      <span style={{ fontSize: "12px", color: "var(--gray-400)" }}>→</span>
-    </div>
-  );
-}
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-
-const eyebrow: React.CSSProperties = {
-  fontSize: "10px", letterSpacing: "0.2em",
-  textTransform: "uppercase", color: "var(--gray-400)", marginBottom: "6px",
-};
-const headline: React.CSSProperties = {
-  fontFamily: "var(--serif)", fontSize: "32px",
-  color: "var(--gray-800)", fontWeight: 400, lineHeight: 1.1,
-};
-
-// Best streak summary card (above the list)
-const bestCard: React.CSSProperties = {
-  display: "flex", justifyContent: "space-between", alignItems: "center",
-  padding: "16px 20px",
-  background: "var(--green-subtle)",
-  border: "1px solid var(--green)",
-  borderRadius: "var(--radius-md)",
-  marginBottom: "24px",
-  maxWidth: "560px",
-};
-const bestCardLabel: React.CSSProperties = {
-  fontSize: "10px", letterSpacing: "0.18em",
-  textTransform: "uppercase", color: "var(--green)",
-  marginBottom: "4px",
-};
-const bestCardDays: React.CSSProperties = {
-  fontFamily: "var(--serif)", fontSize: "28px",
-  color: "var(--green)", lineHeight: 1,
-};
-
-const panelStyles: Record<string, React.CSSProperties> = {
-  overlay: {
-    position: "fixed", inset: 0, zIndex: 100,
-    background: "rgba(0,0,0,0.08)",
-    display: "flex", justifyContent: "flex-end",
-  },
-  panel: {
-    width: "360px", height: "100%",
-    background: "var(--white)",
-    borderLeft: "1px solid var(--gray-200)",
-    padding: "48px 32px 40px",
-    overflowY: "auto",
-    display: "flex", flexDirection: "column", gap: "0",
-    boxShadow: "-8px 0 32px rgba(0,0,0,0.06)",
-  },
-  header: {
-    display: "flex", justifyContent: "space-between", alignItems: "center",
-    marginBottom: "28px",
-  },
-  badge: {
-    fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase",
-    padding: "4px 10px", borderRadius: "99px",
-  },
-  bestBadge: {
-    fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase",
-    padding: "4px 10px", borderRadius: "99px",
-    color: "var(--green)", background: "var(--green-subtle)",
-    border: "1px solid var(--green)",
-  },
-  closeBtn: {
-    background: "none", border: "none", fontSize: "14px",
-    color: "var(--gray-400)", cursor: "pointer", padding: "4px",
-  },
-  bigNum: {
-    display: "flex", flexDirection: "column", gap: "4px", marginBottom: "16px",
-  },
-  bigNumValue: {
-    fontFamily: "var(--serif)", fontSize: "48px",
-    lineHeight: 1,
-  },
-  bigNumLabel: {
-    fontSize: "11px", color: "var(--gray-400)", letterSpacing: "0.05em",
-  },
-  details: { marginBottom: "24px" },
-  divider: { height: "1px", background: "var(--gray-200)", margin: "24px 0" },
-  sectionLabel: {
-    fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase",
-    color: "var(--gray-400)", marginBottom: "10px",
-  },
-  reasonText: {
-    fontSize: "12px", color: "var(--gray-600)", lineHeight: "1.7", fontStyle: "italic",
-  },
-};

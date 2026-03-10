@@ -1,585 +1,335 @@
+/**
+ * DashboardScreen.tsx — Quit design system
+ * Localização: src/renderer/screens/DashboardScreen.tsx
+ */
+
 import React, { useEffect, useState, useRef } from "react";
 import { ipc, ChallengeData, BlockerStatus } from "../lib/ipc";
-import { Button } from "../components/ui";
 import { Sidebar } from "../components/Sidebar";
 import { QuitFlowScreen } from "./QuitFlowScreen";
 import { AddBlockedUrlCard } from "../components/AddBlockedUrlCard";
 import { AppScreen } from "../App";
+import { useI18n } from "../lib/i18n";
 
 interface Props {
   user: { id: string; email: string };
-  onLogout: () => Promise<void>;
   onNavigate: (screen: AppScreen) => void;
 }
 
-function ProgressBar({ percentage }: { percentage: number }) {
-  return (
-    <div
-      style={{
-        height: "3px",
-        background: "var(--gray-200)",
-        borderRadius: "99px",
-        overflow: "hidden",
-      }}
-    >
-      <div
-        style={{
-          height: "100%",
-          width: `${Math.min(percentage, 100)}%`,
-          background: "var(--green)",
-          borderRadius: "99px",
-          transition: "width 0.6s ease",
-        }}
-      />
-    </div>
-  );
+// ── Live elapsed timer ────────────────────────────────────────────────────────
+
+interface Elapsed { lessThanOneDay: boolean; days: number; hours: number; minutes: number; seconds: number; }
+function computeElapsed(startedAt: string): Elapsed {
+  const total = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  return {
+    lessThanOneDay: total < 86400,
+    days:    Math.floor(total / 86400),
+    hours:   Math.floor((total % 86400) / 3600),
+    minutes: Math.floor((total % 3600) / 60),
+    seconds: total % 60,
+  };
+}
+function pad(n: number) { return String(n).padStart(2, "0"); }
+
+function useLiveElapsed(startedAt?: string): Elapsed | null {
+  const [e, setE] = useState<Elapsed | null>(startedAt ? computeElapsed(startedAt) : null);
+  const tRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!startedAt) { setE(null); return; }
+    function tick() {
+      const next = computeElapsed(startedAt!);
+      setE(next);
+      tRef.current = setTimeout(tick, next.lessThanOneDay ? 1000 : 60_000);
+    }
+    tick();
+    return () => { if (tRef.current) clearTimeout(tRef.current); };
+  }, [startedAt]);
+  return e;
 }
 
-// ── Elapsed time helpers ───────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 
-interface ElapsedResult {
-  lessThanOneDay: boolean;
-  days: number;
-  hours: number;
-  minutes: number;
-  seconds: number;
-}
+export function DashboardScreen({ user, onNavigate }: Props) {
+  const { t } = useI18n();
+  const [challenge,      setChallenge]      = useState<ChallengeData | null | undefined>(undefined);
+  const [blockerStatus,  setBlockerStatus]  = useState<BlockerStatus | null>(null);
+  const [showQuitFlow,   setShowQuitFlow]   = useState(false);
+  const [cancellingQuit, setCancellingQuit] = useState(false);
 
-function computeElapsed(startedAt: string): ElapsedResult {
-  const totalSeconds = Math.max(
-    0,
-    Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000),
-  );
-  const days    = Math.floor(totalSeconds / 86400);
-  const hours   = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return { lessThanOneDay: days < 1, days, hours, minutes, seconds };
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
-// ── Live counter — ticks every second when < 1 day, every minute after ────────
-
-function useLiveElapsed(startedAt: string | undefined): ElapsedResult | null {
-  const [elapsed, setElapsed] = useState<ElapsedResult | null>(
-    startedAt ? computeElapsed(startedAt) : null,
-  );
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const elapsed        = useLiveElapsed(challenge?.startedAt);
+  const blockerActive  = blockerStatus?.active ?? false;
+  const qr             = challenge?.quitRequest;
+  const hasPendingQuit = qr?.status === "pending";
 
   useEffect(() => {
-    if (!startedAt) { setElapsed(null); return; }
+    ipc.challenge.active().then(r => setChallenge(r.challenge ?? null));
+    ipc.blocker.status().then(setBlockerStatus);
+  }, []);
 
-    function tick() {
-      const e = computeElapsed(startedAt!);
-      setElapsed(e);
-      // Tick every second while sub-day, every 60 s after
-      timerRef.current = setTimeout(tick, e.lessThanOneDay ? 1000 : 60_000);
+  async function handleCancelQuit() {
+    if (!challenge) return;
+    setCancellingQuit(true);
+    const r = await ipc.challenge.quitRequest.cancel(challenge.id);
+    if (r.ok && r.challenge) setChallenge(r.challenge);
+    setCancellingQuit(false);
+  }
+
+  // Streak display
+  function renderStreak() {
+    if (!challenge || !elapsed) {
+      if (challenge) return (
+        <>
+          <div style={S.bigNum}>—</div>
+          <div style={S.bigSub}>{t.common.loading}</div>
+        </>
+      );
+      return (
+        <>
+          <div style={{ ...S.bigNum, fontSize: "36px" }}>—</div>
+          <div style={S.bigSub}>{user.email}</div>
+        </>
+      );
     }
-
-    tick();
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [startedAt]);
-
-  return elapsed;
-}
-
-// ── Big display: adapts between sub-day (h:mm:ss) and multi-day ───────────────
-
-function ElapsedDisplay({
-  elapsed,
-  dimmed,
-}: {
-  elapsed: ElapsedResult;
-  dimmed: boolean;
-}) {
-  const color = dimmed ? "var(--gray-400)" : "var(--gray-800)";
-
-  if (elapsed.lessThanOneDay) {
-    // Format: "h:mm:ss" if hours > 0, otherwise "mm:ss"
-    const timeStr = elapsed.hours > 0
-      ? `${elapsed.hours}:${pad(elapsed.minutes)}:${pad(elapsed.seconds)}`
-      : `${elapsed.minutes}:${pad(elapsed.seconds)}`;
-
-    const unitLabel = elapsed.hours > 0 ? "h : min : s" : "min : s";
-
+    if (elapsed.lessThanOneDay) {
+      const ts = elapsed.hours > 0
+        ? `${elapsed.hours}:${pad(elapsed.minutes)}:${pad(elapsed.seconds)}`
+        : `${elapsed.minutes}:${pad(elapsed.seconds)}`;
+      return (
+        <>
+          <div style={{ ...S.bigNum, fontSize: "64px" }}>{ts}</div>
+          <div style={S.bigSub}>{elapsed.hours > 0 ? "h · min · s" : "min · s"}</div>
+        </>
+      );
+    }
     return (
       <>
-        <h1
-          style={{
-            fontFamily: "var(--serif)",
-            fontSize: "56px",
-            fontWeight: 400,
-            lineHeight: 1,
-            marginBottom: "4px",
-            color,
-            transition: "color 0.3s",
-            letterSpacing: "-0.02em",
-          }}
-        >
-          {timeStr}
-        </h1>
-        <p
-          style={{
-            fontSize: "12px",
-            color: "var(--gray-400)",
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            marginBottom: "6px",
-          }}
-        >
-          {unitLabel} — primeiro dia
-        </p>
+        <div style={{ ...S.bigNum, opacity: hasPendingQuit ? .4 : 1 }}>{elapsed.days}</div>
+        <div style={S.bigSub}>{t.dash.streakLabel}</div>
       </>
     );
   }
 
   return (
-    <>
-      <h1
-        style={{
-          fontFamily: "var(--serif)",
-          fontSize: "56px",
-          fontWeight: 400,
-          lineHeight: 1,
-          marginBottom: "4px",
-          color,
-          transition: "color 0.3s",
-        }}
-      >
-        {elapsed.days}
-      </h1>
-      <p
-        style={{
-          fontSize: "12px",
-          color: "var(--gray-400)",
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-          marginBottom: "6px",
-        }}
-      >
-        dias consecutivos
-      </p>
-    </>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-const dailyMessages = [
-  "Impulsos são temporários.",
-  "Hoje estás no controlo.",
-  "O progresso é acumulativo.",
-  "Cada dia conta.",
-  "Sem atalhos.",
-];
-
-export function DashboardScreen({ user, onLogout, onNavigate }: Props) {
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [challenge, setChallenge] = useState<ChallengeData | null | undefined>(undefined);
-  const [blockerStatus, setBlockerStatus] = useState<BlockerStatus | null>(null);
-  const [showQuitFlow, setShowQuitFlow] = useState(false);
-  const [cancellingQuit, setCancellingQuit] = useState(false);
-
-  const blockerActive = blockerStatus?.active ?? false;
-
-  // startedAt drives the live counter — only set once challenge loads
-  const elapsed = useLiveElapsed(challenge?.startedAt);
-
-  useEffect(() => {
-    ipc.challenge.active().then((res) => setChallenge(res.challenge ?? null));
-    ipc.blocker.status().then((res) => setBlockerStatus(res));
-  }, []);
-
-  async function handleLogout() {
-    setLoggingOut(true);
-    await onLogout();
-  }
-
-  async function handleCancelQuitRequest() {
-    if (!challenge) return;
-    setCancellingQuit(true);
-    const res = await ipc.challenge.quitRequest.cancel(challenge.id);
-    if (res.ok && res.challenge) setChallenge(res.challenge);
-    setCancellingQuit(false);
-  }
-
-  function refreshBlockerStatus() {
-    ipc.blocker.status().then((res) => setBlockerStatus(res));
-  }
-
-  const todayMsg = dailyMessages[new Date().getDay() % dailyMessages.length];
-  const qr = challenge?.quitRequest;
-  const hasPendingQuit = qr?.status === "pending";
-
-  return (
-    <div
-      style={{
-        height: "100vh",
-        display: "flex",
-        background: "var(--white)",
-        overflow: "hidden",
-      }}
-    >
-      <div
-        className="drag-region"
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          height: "28px",
-          zIndex: 10,
-        }}
-      />
+    <div style={{ height: "100vh", display: "flex", background: "#F7F9F8", overflow: "hidden" }}>
+      <div className="drag-region" style={{ position: "absolute", top: 0, left: 0, right: 0, height: "28px", zIndex: 10 }} />
 
       <Sidebar active="dashboard" onNavigate={onNavigate} />
 
       {showQuitFlow && challenge && (
         <QuitFlowScreen
           challenge={challenge}
-          onDone={(updated) => {
-            setChallenge(updated);
-            setShowQuitFlow(false);
-          }}
+          onDone={u => { setChallenge(u); setShowQuitFlow(false); }}
           onBack={() => setShowQuitFlow(false)}
         />
       )}
 
-      <main
-        style={{
-          flex: 1,
-          padding: "52px 56px 40px",
-          display: "flex",
-          flexDirection: "column",
-          overflowY: "auto",
-        }}
-      >
-        <p style={eyebrow}>
-          {challenge
-            ? hasPendingQuit
-              ? "Período de reflexão"
-              : "Desafio ativo"
-            : "Sessão ativa"}
-        </p>
+      <main style={{ flex: 1, padding: "40px 44px 32px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "20px" }}>
 
-        {challenge && elapsed ? (
-          <>
-            <ElapsedDisplay elapsed={elapsed} dimmed={hasPendingQuit} />
-            <p
-              style={{
-                fontSize: "13px",
-                color: hasPendingQuit ? "var(--gray-400)" : "var(--green)",
-                marginBottom: "28px",
-              }}
-            >
-              {hasPendingQuit
-                ? `Desistência registada. Desbloqueio em ${qr!.hoursRemaining}h.`
-                : todayMsg}
-            </p>
-          </>
-        ) : challenge ? (
-          // Challenge loaded but elapsed not yet initialised (should be instant)
-          <>
-            <h1
-              style={{
-                fontFamily: "var(--serif)",
-                fontSize: "56px",
-                fontWeight: 400,
-                lineHeight: 1,
-                marginBottom: "4px",
-                color: "var(--gray-200)",
-              }}
-            >
-              —
-            </h1>
-            <p style={{ fontSize: "12px", color: "var(--gray-400)", marginBottom: "28px" }}>
-              A calcular...
-            </p>
-          </>
-        ) : (
-          <>
-            <h1
-              style={{
-                fontFamily: "var(--serif)",
-                fontSize: "32px",
-                color: "var(--gray-800)",
-                fontWeight: 400,
-                lineHeight: 1.1,
-                marginBottom: "4px",
-              }}
-            >
-              Bem-vindo.
-            </h1>
-            <p
-              style={{
-                fontSize: "12px",
-                color: "var(--gray-400)",
-                marginBottom: "28px",
-              }}
-            >
-              {user.email}
-            </p>
-          </>
-        )}
+        {/* Header */}
+        <div>
+          <div style={S.eyebrow}>{t.dash.eyebrow}</div>
+          {renderStreak()}
+        </div>
 
-        <div
-          style={{
-            height: "1px",
-            background: "var(--gray-200)",
-            marginBottom: "28px",
-          }}
-        />
+        {/* Divider */}
+        <div style={{ height: "1px", background: "#E4EBE7" }} />
 
+        {/* Content */}
         {challenge === undefined ? (
-          <div style={card}>
-            <p style={{ fontSize: "12px", color: "var(--gray-400)" }}>
-              A carregar...
-            </p>
-          </div>
+          <Card><p style={{ fontSize: "13px", color: "#6B6B6B" }}>{t.common.loading}</p></Card>
         ) : challenge ? (
           <>
+            {/* Pending quit banner */}
             {hasPendingQuit && (
-              <div style={quitBanner}>
+              <div style={S.quitBanner}>
                 <div>
-                  <p style={quitBannerLabel}>Desistência pendente</p>
-                  <p style={quitBannerText}>
-                    Desbloqueio em{" "}
-                    <strong>
-                      {qr!.hoursRemaining > 0
-                        ? `${qr!.hoursRemaining}h`
-                        : `${qr!.minutesRemaining} min`}
-                    </strong>
-                    . Se mudares de ideias, podes cancelar.
-                  </p>
+                  <div style={{ fontSize: "10px", fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: ".1em", color: "#C44536", marginBottom: "4px" }}>
+                    {t.quit.title}
+                  </div>
+                  <div style={{ fontSize: "13px", color: "#1C1C1C", lineHeight: 1.6 }}>
+                    {t.common.loading} {qr!.hoursRemaining > 0 ? `${qr!.hoursRemaining}h` : `${qr!.minutesRemaining} min`}
+                  </div>
                 </div>
-                <button
-                  onClick={handleCancelQuitRequest}
-                  disabled={cancellingQuit}
-                  style={cancelQuitBtn}
-                >
-                  {cancellingQuit ? "..." : "Cancelar desistência"}
+                <button onClick={handleCancelQuit} disabled={cancellingQuit} style={S.cancelBtn}>
+                  {cancellingQuit ? "…" : t.quit.cancel}
                 </button>
               </div>
             )}
 
-            <div style={card}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "flex-start",
-                  marginBottom: "16px",
-                }}
-              >
+            {/* Progress card */}
+            <Card>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "14px" }}>
                 <div>
-                  <p style={fieldLabel}>Progresso</p>
-                  <p
-                    style={{
-                      fontSize: "14px",
-                      color: "var(--gray-800)",
-                      marginTop: "2px",
-                    }}
-                  >
-                    {challenge.progress.daysElapsed} / {challenge.durationDays}{" "}
-                    dias
-                  </p>
+                  <div style={S.cardLabel}>{t.dash.progress}</div>
+                  <div style={S.cardVal}>
+                    {challenge.progress.daysElapsed}
+                    <span style={{ fontSize: "14px", fontWeight: 400, color: "#6B6B6B" }}> / {challenge.durationDays} {t.common.days}</span>
+                  </div>
                 </div>
-                <span style={badge}>
-                  {challenge.progress.daysRemaining} dia
-                  {challenge.progress.daysRemaining !== 1 ? "s" : ""} restante
-                  {challenge.progress.daysRemaining !== 1 ? "s" : ""}
-                </span>
+                <span style={S.badge}>{t.dash.daysLeft(challenge.progress.daysRemaining)}</span>
               </div>
+              <div style={{ height: "3px", background: "#E4EBE7", borderRadius: "99px", overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${Math.min(challenge.progress.percentage, 100)}%`, background: "#1F3D2B", borderRadius: "99px", transition: "width .8s ease" }} />
+              </div>
+            </Card>
 
-              <ProgressBar percentage={challenge.progress.percentage} />
+            {/* Reason card */}
+            <Card>
+              <div style={S.cardLabel}>{t.dash.reasonLabel}</div>
+              <div style={{ fontSize: "13px", color: "#444", lineHeight: 1.7, fontStyle: "italic", paddingLeft: "12px", borderLeft: "2px solid #C8D8CE", marginTop: "8px" }}>
+                "{challenge.reason}"
+              </div>
+              <div style={{ fontSize: "11px", color: "#6B6B6B", marginTop: "10px" }}>
+                {t.dash.started(new Date(challenge.startedAt).toLocaleDateString())}
+                {" · "}{challenge.durationDays} {t.common.days}
+              </div>
+            </Card>
 
-              <div
-                style={{
-                  marginTop: "20px",
-                  padding: "14px 16px",
-                  background: "var(--gray-50)",
-                  borderRadius: "var(--radius-sm)",
-                  borderLeft: "2px solid var(--gray-200)",
-                }}
-              >
-                <p style={{ ...fieldLabel, marginBottom: "6px" }}>
-                  O teu motivo
-                </p>
-                <p
-                  style={{
-                    fontSize: "12px",
-                    color: "var(--gray-600)",
-                    lineHeight: "1.6",
-                    fontStyle: "italic",
-                  }}
+            {/* Actions */}
+            {!hasPendingQuit && (
+              <div>
+                <button style={S.btnQuit} onClick={() => setShowQuitFlow(true)}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "#C44536"; (e.currentTarget as HTMLElement).style.color = "#C44536"; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "#C8D8CE"; (e.currentTarget as HTMLElement).style.color = "#6B6B6B"; }}
                 >
-                  "{challenge.reason}"
-                </p>
+                  {t.dash.btnQuit}
+                </button>
               </div>
+            )}
 
-              {!hasPendingQuit && (
-                <div style={{ marginTop: "20px" }}>
-                  <button onClick={() => setShowQuitFlow(true)} style={quitBtn}>
-                    Tentar desistir
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Bloqueios activos — só aparece quando bloqueador está activo */}
+            {/* Blocker status */}
             {blockerActive && blockerStatus && (
-              <div style={{ marginTop: "12px" }}>
-                <AddBlockedUrlCard
-                  blockerStatus={blockerStatus}
-                  onUpdated={refreshBlockerStatus}
-                />
+              <div>
+                <AddBlockedUrlCard blockerStatus={blockerStatus} onUpdated={() => ipc.blocker.status().then(setBlockerStatus)} />
               </div>
             )}
           </>
         ) : (
-          <div style={{ ...card, borderStyle: "dashed" }}>
-            <p style={fieldLabel}>Sem desafio ativo</p>
-            <p
-              style={{
-                fontSize: "12px",
-                color: "var(--gray-400)",
-                lineHeight: "1.6",
-                margin: "6px 0 20px",
-              }}
-            >
-              Cria um desafio para começar.
+          /* No active challenge */
+          <Card dashed>
+            <div style={S.cardLabel}>{t.dash.noChallenge}</div>
+            <p style={{ fontSize: "13px", color: "#6B6B6B", lineHeight: 1.7, margin: "8px 0 20px" }}>
+              {t.dash.noChallengeDesc}
             </p>
-            <div style={{ maxWidth: "200px" }}>
-              <Button onClick={() => onNavigate("challenge")}>
-                Criar desafio
-              </Button>
-            </div>
-          </div>
+            <button style={S.btnPrimary} onClick={() => onNavigate("challenge")}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#173222"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#1F3D2B"; }}
+            >
+              {t.create.btn}
+            </button>
+          </Card>
         )}
 
-        {/* Adult Filter status — quando não há desafio activo */}
-        {!blockerActive && (
-          <div style={{ ...card, marginTop: "12px" }}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <div>
-                <p style={fieldLabel}>Adult Filter</p>
-                <p
-                  style={{
-                    fontSize: "13px",
-                    color: "var(--gray-600)",
-                    marginTop: "2px",
-                  }}
-                >
-                  Inativo
-                </p>
-              </div>
-              <span
-                style={{
-                  ...badge,
-                  color: "var(--gray-400)",
-                  background: "var(--gray-200)",
-                }}
-              >
-                OFF
-              </span>
+        {/* Blocker inactive notice */}
+        {!blockerActive && challenge && (
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={S.cardLabel}>{t.dash.blockerName}</div>
+              <span style={{ ...S.badge, background: "#FFF3E0", color: "#E65100" }}>OFF</span>
             </div>
-          </div>
+          </Card>
         )}
 
         <div style={{ flex: 1 }} />
-        <div style={{ maxWidth: "220px" }}>
-          <Button variant="ghost" loading={loggingOut} onClick={handleLogout}>
-            Terminar sessão
-          </Button>
-        </div>
+
+        {/* Blocker active bar */}
+        {blockerActive && (
+          <div style={S.blockerBar}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={S.dot} />
+              <div>
+                <div style={{ fontSize: "12px", fontWeight: 600, color: "#1C1C1C" }}>{t.dash.blockerName}</div>
+                <div style={{ fontSize: "11px", color: "#6B6B6B", marginTop: "1px" }}>
+                  {t.dash.blockerSub(blockerStatus?.blockedDomains?.length ?? 47)}
+                </div>
+              </div>
+            </div>
+            <span style={{ fontSize: "10px", fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: ".1em", color: "#1F3D2B", background: "#EBF2EE", border: "1px solid #C8D8CE", padding: "4px 12px", borderRadius: "99px" }}>
+              {t.dash.blockerActive}
+            </span>
+          </div>
+        )}
       </main>
     </div>
   );
 }
 
-const eyebrow: React.CSSProperties = {
-  fontSize: "10px",
-  letterSpacing: "0.2em",
-  textTransform: "uppercase",
-  color: "var(--gray-400)",
-  marginBottom: "6px",
-};
-const card: React.CSSProperties = {
-  padding: "20px 24px",
-  border: "1px solid var(--gray-200)",
-  borderRadius: "var(--radius-md)",
-  background: "var(--gray-50)",
-};
-const fieldLabel: React.CSSProperties = {
-  fontSize: "10px",
-  letterSpacing: "0.18em",
-  textTransform: "uppercase",
-  color: "var(--gray-400)",
-};
-const badge: React.CSSProperties = {
-  fontSize: "10px",
-  letterSpacing: "0.1em",
-  textTransform: "uppercase",
-  color: "var(--gray-400)",
-  background: "var(--gray-200)",
-  padding: "4px 10px",
-  borderRadius: "99px",
-  flexShrink: 0,
-};
-const quitBtn: React.CSSProperties = {
-  padding: "7px 14px",
-  border: "1px solid var(--gray-200)",
-  borderRadius: "var(--radius-sm)",
-  fontFamily: "var(--mono)",
-  fontSize: "10px",
-  letterSpacing: "0.1em",
-  textTransform: "uppercase",
-  color: "var(--gray-600)",
-  background: "transparent",
-  cursor: "pointer",
-};
-const cancelQuitBtn: React.CSSProperties = {
-  padding: "8px 14px",
-  border: "1px solid var(--green)",
-  borderRadius: "var(--radius-sm)",
-  fontFamily: "var(--mono)",
-  fontSize: "10px",
-  letterSpacing: "0.1em",
-  textTransform: "uppercase",
-  color: "var(--green)",
-  background: "transparent",
-  cursor: "pointer",
-  flexShrink: 0,
-};
-const quitBanner: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: "16px",
-  padding: "16px 20px",
-  background: "#fdf8f0",
-  border: "1px solid #e8d5a3",
-  borderRadius: "var(--radius-md)",
-  marginBottom: "12px",
-};
-const quitBannerLabel: React.CSSProperties = {
-  fontSize: "10px",
-  letterSpacing: "0.15em",
-  textTransform: "uppercase",
-  color: "#9a7a30",
-  marginBottom: "4px",
-};
-const quitBannerText: React.CSSProperties = {
-  fontSize: "12px",
-  color: "#6b5520",
-  lineHeight: "1.5",
+// ── Card ──────────────────────────────────────────────────────────────────────
+
+function Card({ children, dashed }: { children: React.ReactNode; dashed?: boolean }) {
+  return (
+    <div style={{
+      background: "#fff",
+      border: `1.5px ${dashed ? "dashed" : "solid"} #E4EBE7`,
+      borderRadius: "8px",
+      padding: "18px 22px",
+      boxShadow: "0 1px 3px rgba(0,0,0,.04)",
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+
+const S: Record<string, React.CSSProperties> = {
+  eyebrow: {
+    fontSize: "10px", fontWeight: 600, letterSpacing: ".12em", textTransform: "uppercase",
+    color: "#6B8F7A", marginBottom: "8px",
+  },
+  bigNum: {
+    fontSize: "96px", fontWeight: 700, letterSpacing: "-4px", color: "#1C1C1C", lineHeight: 1,
+    animation: "fadeUp .4s ease both",
+  },
+  bigSub: {
+    fontSize: "11px", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em",
+    color: "#6B6B6B", marginTop: "6px",
+    animation: "fadeUp .4s ease .06s both",
+  },
+  cardLabel: {
+    fontSize: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "#6B6B6B", marginBottom: "6px",
+  },
+  cardVal: {
+    fontSize: "22px", fontWeight: 700, color: "#1C1C1C",
+  },
+  badge: {
+    fontSize: "10px", fontWeight: 600, padding: "4px 10px",
+    borderRadius: "99px", background: "#EBF2EE", color: "#1F3D2B",
+    whiteSpace: "nowrap",
+  },
+  quitBanner: {
+    display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px",
+    padding: "16px 18px",
+    background: "#FDECEA", border: "1px solid #f5c5c0", borderRadius: "8px",
+  },
+  cancelBtn: {
+    padding: "7px 14px", border: "1px solid #f5c5c0", borderRadius: "5px",
+    fontSize: "11px", fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase",
+    color: "#C44536", background: "transparent", cursor: "pointer", flexShrink: 0,
+    transition: "all .15s",
+  },
+  btnQuit: {
+    padding: "8px 16px",
+    border: "1.5px solid #C8D8CE", borderRadius: "5px",
+    fontSize: "11px", fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase",
+    color: "#6B6B6B", background: "transparent", cursor: "pointer",
+    transition: "all .15s",
+  },
+  btnPrimary: {
+    padding: "10px 20px",
+    border: "none", borderRadius: "5px",
+    fontSize: "12px", fontWeight: 600, letterSpacing: ".07em", textTransform: "uppercase",
+    color: "#fff", background: "#1F3D2B", cursor: "pointer",
+    transition: "background .15s",
+  },
+  blockerBar: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    padding: "14px 0", borderTop: "1px solid #E4EBE7",
+  },
+  dot: {
+    width: "7px", height: "7px", borderRadius: "50%",
+    background: "#1F3D2B", boxShadow: "0 0 0 3px rgba(31,61,43,.15)",
+    flexShrink: 0,
+    animation: "pulse 2.5s ease-in-out infinite",
+  },
 };

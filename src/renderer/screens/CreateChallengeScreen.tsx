@@ -1,8 +1,13 @@
-import React, { useEffect, useState, useCallback } from "react";
+/**
+ * CreateChallengeScreen.tsx — Quit design system
+ * Localização: src/renderer/screens/CreateChallengeScreen.tsx
+ */
+
+import React, { useEffect, useState } from "react";
 import { ipc, ChallengeData, InstalledApp, BlockedApp } from "../lib/ipc";
-import { Button, Input, ErrorMsg } from "../components/ui";
 import { Sidebar } from "../components/Sidebar";
 import { AppScreen } from "../App";
+import { useI18n } from "../lib/i18n";
 
 interface Props {
   onCreated: (challenge: ChallengeData) => void;
@@ -10,414 +15,332 @@ interface Props {
 }
 
 const PRESET_DAYS = [7, 30, 90];
-const REASON_MIN = 10;
+const REASON_MIN  = 10;
 
 export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
-  const [hasActive, setHasActive] = useState<boolean | null>(null);
-  const [selectedDays, setSelectedDays] = useState<number | null>(30);
-  const [customDays, setCustomDays] = useState("");
-  const [useCustom, setUseCustom] = useState(false);
-  const [reason, setReason] = useState("");
-  // Track whether the user has ever touched the reason field — only show
-  // the hint after they've interacted, not from the moment the page loads.
+  const { t } = useI18n();
+
+  const [hasActive,     setHasActive]     = useState<boolean | null>(null);
+  const [selectedDays,  setSelectedDays]  = useState<number | null>(30);
+  const [customDays,    setCustomDays]    = useState("");
+  const [useCustom,     setUseCustom]     = useState(false);
+  const [reason,        setReason]        = useState("");
   const [reasonTouched, setReasonTouched] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [loading,       setLoading]       = useState(false);
+  const [error,         setError]         = useState("");
 
-  // Blocker preferences
-  const [blockReddit, setBlockReddit] = useState(false);
-  const [blockTwitter, setBlockTwitter] = useState(false);
-  const [blockedApps, setBlockedApps] = useState<BlockedApp[]>([]);
-  const [customUrls, setCustomUrls] = useState<string[]>([]);
-  const [urlInput, setUrlInput] = useState("");
-
-  // App picker
+  const [blockReddit,   setBlockReddit]   = useState(false);
+  const [blockTwitter,  setBlockTwitter]  = useState(false);
+  const [blockedApps,   setBlockedApps]   = useState<BlockedApp[]>([]);
+  const [customUrls,    setCustomUrls]    = useState<string[]>([]);
+  const [urlInput,      setUrlInput]      = useState("");
   const [installedApps, setInstalledApps] = useState<InstalledApp[] | null>(null);
-  const [appSearch, setAppSearch] = useState("");
+  const [appSearch,     setAppSearch]     = useState("");
   const [showAppPicker, setShowAppPicker] = useState(false);
-  const [loadingApps, setLoadingApps] = useState(false);
+  const [loadingApps,   setLoadingApps]   = useState(false);
 
   useEffect(() => {
-    ipc.challenge.active().then((res) => setHasActive(!!res.challenge));
+    ipc.challenge.active().then(r => setHasActive(!!r.challenge));
   }, []);
 
   async function handleLoadApps() {
     if (installedApps !== null) { setShowAppPicker(true); return; }
     setLoadingApps(true);
-    const res = await ipc.blocker.installedApps();
-    setInstalledApps(res.apps ?? []);
+    const r = await ipc.blocker.installedApps();
+    setInstalledApps(r.apps ?? []);
     setLoadingApps(false);
     setShowAppPicker(true);
   }
 
   function toggleApp(app: InstalledApp) {
-    setBlockedApps(prev => {
-      const exists = prev.find(a => a.exePath === app.exePath);
-      if (exists) return prev.filter(a => a.exePath !== app.exePath);
-      return [...prev, { name: app.name, exePath: app.exePath }];
-    });
+    setBlockedApps(p => p.find(a => a.exePath === app.exePath)
+      ? p.filter(a => a.exePath !== app.exePath)
+      : [...p, { name: app.name, exePath: app.exePath }]);
   }
 
   function addCustomUrl() {
-    const url = urlInput.trim();
-    if (!url || customUrls.includes(url)) return;
-    setCustomUrls(prev => [...prev, url]);
+    const u = urlInput.trim();
+    if (!u || customUrls.includes(u)) return;
+    setCustomUrls(p => [...p, u]);
     setUrlInput("");
   }
 
-  function removeUrl(url: string) {
-    setCustomUrls(prev => prev.filter(u => u !== url));
-  }
-
-  const effectiveDays = useCustom ? parseInt(customDays, 10) : selectedDays;
-  const filteredApps = (installedApps ?? []).filter(a =>
-    a.name.toLowerCase().includes(appSearch.toLowerCase())
-  );
-
-  // ── Validation ─────────────────────────────────────────────────────────────
-
-  const daysValid   = !!effectiveDays && !isNaN(effectiveDays) && effectiveDays >= 7;
-  const reasonValid = reason.trim().length >= REASON_MIN;
-  const canSubmit   = daysValid && reasonValid;
-
-  // Hint: how many characters are still needed
-  const reasonMissing = Math.max(0, REASON_MIN - reason.trim().length);
+  const effectiveDays  = useCustom ? parseInt(customDays, 10) : selectedDays;
+  const filteredApps   = (installedApps ?? []).filter(a => a.name.toLowerCase().includes(appSearch.toLowerCase()));
+  const daysValid      = !!effectiveDays && !isNaN(effectiveDays) && effectiveDays >= 7;
+  const reasonValid    = reason.trim().length >= REASON_MIN;
+  const canSubmit      = daysValid && reasonValid;
+  const reasonMissing  = Math.max(0, REASON_MIN - reason.trim().length);
   const showReasonHint = reasonTouched && !reasonValid;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
-    // Mark touched so hints appear if user somehow bypasses blur
-    setReasonTouched(true);
-    if (!daysValid)   { setError("Escolhe uma duração válida (mínimo 7 dias)."); return; }
-    if (!reasonValid) { setError(`O motivo precisa de pelo menos ${REASON_MIN} caracteres.`); return; }
-
+    setError(""); setReasonTouched(true);
+    if (!daysValid)   { setError(t.create.daysMin); return; }
+    if (!reasonValid) { setError(t.create.reasonMin(reasonMissing)); return; }
     setLoading(true);
     const res = await ipc.challenge.create({
-      durationDays: effectiveDays!,
-      reason: reason.trim(),
-      blockReddit,
-      blockTwitter,
-      blockedApps,
-      blockedUrls: customUrls,
+      durationDays: effectiveDays!, reason: reason.trim(),
+      blockReddit, blockTwitter, blockedApps, blockedUrls: customUrls,
     });
     setLoading(false);
     if (res.error) { setError(res.error); return; }
     if (res.ok && res.challenge) onCreated(res.challenge);
   }
 
-  if (hasActive === null) {
+  function Shell({ children }: { children: React.ReactNode }) {
     return (
-      <div style={{ height: "100vh", display: "flex", background: "var(--white)" }}>
-        <div className="drag-region" style={dragRegion} />
+      <div style={{ height: "100vh", display: "flex", background: "#F7F9F8", overflow: "hidden", position: "relative" }}>
+        <div className="drag-region" style={{ position: "absolute", top: 0, left: 0, right: 0, height: "28px", zIndex: 10 }} />
         <Sidebar active="challenge" onNavigate={onNavigate} />
-        <main style={mainStyle}><p style={{ fontSize: "12px", color: "var(--gray-400)" }}>A carregar...</p></main>
+        {children}
       </div>
     );
   }
 
-  if (hasActive) {
-    return (
-      <div style={{ height: "100vh", display: "flex", background: "var(--white)" }}>
-        <div className="drag-region" style={dragRegion} />
-        <Sidebar active="challenge" onNavigate={onNavigate} />
-        <main style={mainStyle}>
-          <p style={eyebrow}>Desafio</p>
-          <h1 style={headline}>Já tens um desafio ativo.</h1>
-          <p style={subtext}>Só é possível ter um desafio de cada vez.<br />Cancela o desafio atual no Estado se quiseres começar um novo.</p>
-          <div style={{ maxWidth: "220px", marginTop: "8px" }}>
-            <Button onClick={() => onNavigate("dashboard")}>Ver estado atual</Button>
-          </div>
-        </main>
-      </div>
-    );
-  }
+  if (hasActive === null) return (
+    <Shell>
+      <main style={mainS}>
+        <p style={{ fontSize: "13px", color: "#6B6B6B" }}>{t.common.loading}</p>
+      </main>
+    </Shell>
+  );
+
+  if (hasActive) return (
+    <Shell>
+      <main style={mainS}>
+        <div style={S.eyebrow}>{t.nav.challenge}</div>
+        <div style={S.headline}>{t.create.alreadyActive}</div>
+        <p style={{ fontSize: "13px", color: "#6B6B6B", lineHeight: 1.7, marginBottom: "24px", maxWidth: "400px" }}>
+          {t.create.alreadyActiveDesc.split("\n").join(" ")}
+        </p>
+        <button style={S.btnPrimary} onClick={() => onNavigate("dashboard")}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#173222"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#1F3D2B"; }}
+        >
+          {t.create.viewStatus}
+        </button>
+      </main>
+    </Shell>
+  );
+
+  // ── End date preview
+  const endDate = effectiveDays && daysValid
+    ? new Date(Date.now() + effectiveDays * 86_400_000).toLocaleDateString()
+    : null;
 
   return (
-    <div style={{ height: "100vh", display: "flex", background: "var(--white)", overflow: "hidden" }}>
-      <div className="drag-region" style={dragRegion} />
-      <Sidebar active="challenge" onNavigate={onNavigate} />
-      <main style={mainStyle}>
-        <p style={eyebrow}>Novo desafio</p>
-        <h1 style={headline}>Comprometer.</h1>
-        <p style={subtext}>Define a duração e o teu motivo. Não há volta atrás fácil.</p>
-        <div style={divider} />
+    <Shell>
+      <main style={{ ...mainS, overflowY: "auto" }}>
+        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "540px" }}>
 
-        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "32px", maxWidth: "520px" }}>
+          {/* Header */}
+          <div>
+            <div style={S.eyebrow}>{t.nav.challenge}</div>
+            <div style={S.headline}>{t.create.title}</div>
+          </div>
 
-          {/* ── Duração ── */}
-          <div style={fieldGroup}>
-            <label style={fieldLabel}>Duração</label>
-            <div style={{ display: "flex", gap: "8px" }}>
-              {PRESET_DAYS.map((d) => (
+          <div style={{ height: "1px", background: "#E4EBE7" }} />
+
+          {/* Duration */}
+          <div>
+            <div style={S.label}>{t.create.duration}</div>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" as const }}>
+              {PRESET_DAYS.map(d => (
                 <button key={d} type="button"
-                  onClick={() => { setSelectedDays(d); setUseCustom(false); setCustomDays(""); setError(""); }}
+                  onClick={() => { setSelectedDays(d); setUseCustom(false); }}
                   style={{
-                    ...presetBtn,
-                    color:       selectedDays === d && !useCustom ? "var(--green)"        : "var(--gray-600)",
-                    borderColor: selectedDays === d && !useCustom ? "var(--green)"        : "var(--gray-200)",
-                    background:  selectedDays === d && !useCustom ? "var(--green-subtle)" : "transparent",
-                  }}>
-                  {d} dias
+                    ...S.preset,
+                    borderColor: !useCustom && selectedDays === d ? "#1F3D2B" : "#C8D8CE",
+                    color:       !useCustom && selectedDays === d ? "#1F3D2B" : "#6B6B6B",
+                    background:  !useCustom && selectedDays === d ? "#EBF2EE" : "transparent",
+                  }}
+                >
+                  {d} {t.common.days}
                 </button>
               ))}
+              <button type="button"
+                onClick={() => setUseCustom(true)}
+                style={{
+                  ...S.preset,
+                  borderColor: useCustom ? "#1F3D2B" : "#C8D8CE",
+                  color:       useCustom ? "#1F3D2B" : "#6B6B6B",
+                  background:  useCustom ? "#EBF2EE" : "transparent",
+                }}
+              >
+                {t.create.customPlaceholder}
+              </button>
             </div>
-            <Input id="custom-days" type="text" inputMode="numeric"
-              placeholder="Personalizado (mín. 7 dias)" value={customDays}
-              onChange={e => {
-                const v = e.target.value.replace(/\D/g, "");
-                setCustomDays(v); setUseCustom(true); setSelectedDays(null); setError("");
-              }}
-              style={{ borderColor: useCustom ? "var(--green)" : "var(--gray-200)" }} />
-            {useCustom && customDays && parseInt(customDays) < 7 && (
-              <p style={hintError}>Mínimo de 7 dias.</p>
+            {useCustom && (
+              <input
+                type="number" min={7} placeholder="Ex: 21"
+                value={customDays}
+                onChange={e => setCustomDays(e.target.value)}
+                style={{ ...S.input, marginTop: "10px", width: "120px" }}
+              />
+            )}
+            {useCustom && customDays && !daysValid && (
+              <p style={S.hint}>{t.create.daysMin}</p>
             )}
           </div>
 
-          {/* ── Motivo ── */}
-          <div style={fieldGroup}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-              <label style={fieldLabel}>Estou a fazer isto porque…</label>
-              {/* Live character counter — shows remaining when below min, total when above */}
-              <span style={{
-                fontSize: "10px",
-                color: showReasonHint ? "var(--red-muted)" : reason.trim().length >= REASON_MIN ? "var(--green)" : "var(--gray-400)",
-                transition: "color 0.2s",
-              }}>
-                {reason.trim().length < REASON_MIN
-                  ? `ainda faltam ${reasonMissing} caract${reasonMissing === 1 ? "ere" : "eres"}`
-                  : `${reason.length}/500`}
-              </span>
-            </div>
+          {/* Reason */}
+          <div>
+            <div style={S.label}>{t.create.reason}</div>
             <textarea
+              rows={4}
+              placeholder={`${t.create.reason}…`}
               value={reason}
               onChange={e => setReason(e.target.value)}
               onBlur={() => setReasonTouched(true)}
-              placeholder="Escreve o teu motivo. Vais rever isto se tentares desistir."
-              rows={4}
-              maxLength={500}
-              style={{
-                ...textareaStyle,
-                borderColor: showReasonHint
-                  ? "var(--red-muted)"
-                  : reason.trim().length >= REASON_MIN
-                    ? "var(--green)"
-                    : "var(--gray-200)",
-              }}
-              onFocus={e => {
-                if (!showReasonHint && reason.trim().length < REASON_MIN)
-                  e.currentTarget.style.borderColor = "var(--gray-400)";
-              }}
-              onBlur={e => {
-                setReasonTouched(true);
-                e.currentTarget.style.borderColor = showReasonHint
-                  ? "var(--red-muted)"
-                  : reason.trim().length >= REASON_MIN
-                    ? "var(--green)"
-                    : "var(--gray-200)";
-              }}
+              style={S.textarea}
             />
-            {/* Inline hint — appears after first blur if still too short */}
             {showReasonHint && (
-              <p style={hintError}>
-                Escreve um pouco mais — pelo menos {REASON_MIN} caracteres.
-              </p>
+              <p style={S.hint}>{t.create.reasonMin(reasonMissing)}</p>
             )}
           </div>
 
-          {/* ── Bloqueios ── */}
-          <div style={fieldGroup}>
-            <label style={fieldLabel}>O que bloquear durante o desafio</label>
-            <p style={{ fontSize: "11px", color: "var(--gray-400)", marginBottom: "12px", lineHeight: "1.6" }}>
-              Estes bloqueios são aplicados ao sistema inteiro — browser, apps, tudo. Só são removidos quando o desafio terminar.
-            </p>
+          {/* Blocking */}
+          <div>
+            <div style={S.label}>{t.create.blocking}</div>
+            <p style={{ fontSize: "11px", color: "#6B6B6B", marginBottom: "12px", lineHeight: 1.6 }}>{t.create.blockingDesc}</p>
+            <ToggleRow label="Reddit" desc="reddit.com" checked={blockReddit} onChange={setBlockReddit} />
+            <ToggleRow label="Twitter / X" desc="twitter.com, x.com" checked={blockTwitter} onChange={setBlockTwitter} />
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
-              <ToggleRow
-                label="Reddit"
-                description="reddit.com e todos os CDNs (v.redd.it, etc.)"
-                checked={blockReddit}
-                onChange={setBlockReddit}
-              />
-              <ToggleRow
-                label="Twitter / X"
-                description="twitter.com, x.com e app de desktop"
-                checked={blockTwitter}
-                onChange={setBlockTwitter}
-              />
-            </div>
-
-            <div style={{ marginBottom: "16px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                <span style={{ fontSize: "11px", color: "var(--gray-600)" }}>Apps instaladas</span>
-                <button type="button" onClick={handleLoadApps} disabled={loadingApps}
-                  style={{ ...smallBtn, opacity: loadingApps ? 0.5 : 1 }}>
-                  {loadingApps ? "A carregar..." : "Seleccionar apps"}
-                </button>
+            {/* Custom URLs */}
+            <div style={{ marginTop: "16px" }}>
+              <div style={{ ...S.label, marginBottom: "8px" }}>{t.create.additionalUrls}</div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <input
+                  type="text" value={urlInput}
+                  onChange={e => setUrlInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCustomUrl(); } }}
+                  placeholder={t.create.urlPlaceholder}
+                  style={{ ...S.input, flex: 1 }}
+                />
+                <button type="button" onClick={addCustomUrl} style={S.btnSecondary}>+</button>
               </div>
-              {blockedApps.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                  {blockedApps.map(app => (
-                    <AppTag key={app.exePath} name={app.name}
-                      onRemove={() => setBlockedApps(p => p.filter(a => a.exePath !== app.exePath))} />
+              {customUrls.length > 0 && (
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" as const, marginTop: "8px" }}>
+                  {customUrls.map(u => (
+                    <span key={u} style={S.urlTag}>
+                      {u}
+                      <span onClick={() => setCustomUrls(p => p.filter(x => x !== u))} style={{ marginLeft: "6px", cursor: "pointer", opacity: .6 }}>×</span>
+                    </span>
                   ))}
                 </div>
               )}
             </div>
 
-            <div>
-              <span style={{ fontSize: "11px", color: "var(--gray-600)", display: "block", marginBottom: "8px" }}>URLs / domínios adicionais</span>
-              <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
-                <input
-                  type="text" placeholder="ex: instagram.com"
-                  value={urlInput} onChange={e => setUrlInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCustomUrl(); } }}
-                  style={urlInputStyle}
-                  onFocus={e => e.currentTarget.style.borderColor = "var(--green)"}
-                  onBlur={e => e.currentTarget.style.borderColor = "var(--gray-200)"}
-                />
-                <button type="button" onClick={addCustomUrl} style={addBtn}>+</button>
-              </div>
-              {customUrls.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                  {customUrls.map(url => (
-                    <AppTag key={url} name={url} onRemove={() => removeUrl(url)} />
-                  ))}
+            {/* App picker */}
+            <div style={{ marginTop: "16px" }}>
+              <div style={{ ...S.label, marginBottom: "8px" }}>{t.create.installedApps}</div>
+              <button type="button" onClick={handleLoadApps} style={S.btnSecondary} disabled={loadingApps}>
+                {loadingApps ? t.create.loading : blockedApps.length > 0 ? t.create.confirm(blockedApps.length) : t.create.select}
+              </button>
+              {showAppPicker && installedApps !== null && (
+                <div style={S.appPickerWrap}>
+                  <input
+                    type="text" value={appSearch} onChange={e => setAppSearch(e.target.value)}
+                    placeholder="Pesquisar…"
+                    style={{ ...S.input, marginBottom: "8px" }}
+                  />
+                  {filteredApps.length === 0
+                    ? <p style={{ fontSize: "12px", color: "#6B6B6B" }}>{t.create.noAppsFound}</p>
+                    : filteredApps.map(app => {
+                      const sel = !!blockedApps.find(a => a.exePath === app.exePath);
+                      return (
+                        <div key={app.exePath} onClick={() => toggleApp(app)} style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          padding: "8px 12px", borderRadius: "5px", cursor: "pointer",
+                          background: sel ? "#EBF2EE" : "transparent",
+                          marginBottom: "2px",
+                        }}>
+                          <span style={{ fontSize: "13px", color: "#1C1C1C" }}>{app.name}</span>
+                          {sel && <span style={{ fontSize: "11px", color: "#1F3D2B", fontWeight: 600 }}>✓</span>}
+                        </div>
+                      );
+                    })
+                  }
                 </div>
               )}
             </div>
           </div>
 
-          {/* Preview */}
-          {effectiveDays && effectiveDays >= 7 && (
-            <div style={{ padding: "14px 18px", background: "var(--green-subtle)", borderLeft: "2px solid var(--green)", borderRadius: "0 var(--radius-sm) var(--radius-sm) 0" }}>
-              <p style={{ fontSize: "10px", letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--green)", marginBottom: "4px" }}>Resumo</p>
-              <p style={{ fontSize: "12px", color: "var(--green)", marginBottom: "4px" }}>
-                {effectiveDays} dias — termina a {new Date(Date.now() + effectiveDays * 86400000).toLocaleDateString("pt-PT", { day: "numeric", month: "long", year: "numeric" })}
-              </p>
-              {(blockReddit || blockTwitter || blockedApps.length > 0 || customUrls.length > 0) && (
-                <p style={{ fontSize: "11px", color: "var(--green)", opacity: 0.8 }}>
-                  Bloqueios: {[
-                    blockReddit && "Reddit",
-                    blockTwitter && "Twitter",
-                    blockedApps.length > 0 && `${blockedApps.length} app${blockedApps.length > 1 ? "s" : ""}`,
-                    customUrls.length > 0 && `${customUrls.length} URL${customUrls.length > 1 ? "s" : ""}`,
-                  ].filter(Boolean).join(", ")}
-                </p>
-              )}
+          {/* Summary */}
+          {endDate && (
+            <div style={S.summary}>
+              <div style={{ fontSize: "9px", fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: ".12em", color: "#1F3D2B", marginBottom: "4px" }}>
+                {t.create.summary}
+              </div>
+              <div style={{ fontSize: "13px", color: "#1F3D2B", fontWeight: 500 }}>
+                {t.create.summaryText(effectiveDays!, endDate)}
+              </div>
             </div>
           )}
 
-          <ErrorMsg message={error} />
+          {/* Error */}
+          {error && <p style={{ fontSize: "12px", color: "#C44536" }}>{error}</p>}
 
-          <div style={{ maxWidth: "260px" }}>
-            <Button
-              type="submit"
-              loading={loading}
-              disabled={!canSubmit}
-              // On click while disabled, mark touched so hints appear immediately
-              onClick={!canSubmit ? () => setReasonTouched(true) : undefined}
-            >
-              Iniciar desafio
-            </Button>
-            {/* Summary of what's still missing — shown below the button */}
-            {!canSubmit && (
-              <p style={blockedHint}>
-                {!daysValid && !reasonValid
-                  ? "Escolhe uma duração e escreve o teu motivo."
-                  : !daysValid
-                    ? "Escolhe a duração do desafio."
-                    : `Faltam ${reasonMissing} caract${reasonMissing === 1 ? "ere" : "eres"} no motivo.`}
-              </p>
-            )}
-          </div>
+          {/* Submit */}
+          <button type="submit" disabled={loading || !canSubmit} style={{
+            ...S.btnPrimary,
+            opacity: !canSubmit ? .5 : 1,
+            cursor: !canSubmit ? "not-allowed" : "pointer",
+          }}
+            onMouseEnter={e => { if (canSubmit) (e.currentTarget as HTMLElement).style.background = "#173222"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#1F3D2B"; }}
+          >
+            {loading ? t.create.startingMsg : t.create.btn}
+          </button>
         </form>
       </main>
-
-      {/* App Picker Modal */}
-      {showAppPicker && (
-        <div style={modalOverlay} onClick={() => setShowAppPicker(false)}>
-          <div style={modalPanel} onClick={e => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-              <p style={{ ...fieldLabel, fontSize: "11px" }}>Apps instaladas</p>
-              <button onClick={() => setShowAppPicker(false)} style={{ background: "none", border: "none", color: "var(--gray-400)", cursor: "pointer", fontSize: "14px" }}>✕</button>
-            </div>
-            <input
-              type="text" placeholder="Pesquisar..."
-              value={appSearch} onChange={e => setAppSearch(e.target.value)}
-              style={{ ...urlInputStyle, marginBottom: "12px", width: "100%" }}
-              onFocus={e => e.currentTarget.style.borderColor = "var(--green)"}
-              onBlur={e => e.currentTarget.style.borderColor = "var(--gray-200)"}
-              autoFocus
-            />
-            <div style={{ maxHeight: "320px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "2px" }}>
-              {filteredApps.length === 0 && (
-                <p style={{ fontSize: "12px", color: "var(--gray-400)", padding: "12px 0" }}>Nenhuma app encontrada.</p>
-              )}
-              {filteredApps.map(app => {
-                const isSelected = blockedApps.some(a => a.exePath === app.exePath);
-                return (
-                  <div key={app.exePath} onClick={() => toggleApp(app)}
-                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderRadius: "var(--radius-sm)", cursor: "pointer", background: isSelected ? "var(--green-subtle)" : "transparent", transition: "background 0.1s" }}>
-                    <span style={{ fontSize: "12px", color: isSelected ? "var(--green)" : "var(--gray-800)" }}>{app.name}</span>
-                    {isSelected && <span style={{ fontSize: "10px", color: "var(--green)" }}>✓</span>}
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{ marginTop: "16px", display: "flex", justifyContent: "flex-end" }}>
-              <button onClick={() => setShowAppPicker(false)} style={{ ...smallBtn, borderColor: "var(--green)", color: "var(--green)" }}>
-                Confirmar ({blockedApps.length} seleccionadas)
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    </Shell>
   );
 }
 
-function ToggleRow({ label, description, checked, onChange }: {
-  label: string; description: string; checked: boolean; onChange: (v: boolean) => void;
+// ── ToggleRow ─────────────────────────────────────────────────────────────────
+
+function ToggleRow({ label, desc, checked, onChange }: {
+  label: string; desc: string; checked: boolean; onChange: (v: boolean) => void;
 }) {
   return (
-    <div
-      onClick={() => onChange(!checked)}
-      style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", border: `1px solid ${checked ? "var(--green)" : "var(--gray-200)"}`, borderRadius: "var(--radius-sm)", cursor: "pointer", background: checked ? "var(--green-subtle)" : "transparent", transition: "all 0.15s" }}>
+    <div onClick={() => onChange(!checked)} style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "11px 14px", borderRadius: "5px", cursor: "pointer",
+      border: `1.5px solid ${checked ? "#1F3D2B" : "#E4EBE7"}`,
+      background: checked ? "#EBF2EE" : "#fff",
+      marginBottom: "6px", transition: "all .15s",
+    }}>
       <div>
-        <p style={{ fontSize: "12px", color: checked ? "var(--green)" : "var(--gray-800)", fontWeight: 500 }}>{label}</p>
-        <p style={{ fontSize: "10px", color: checked ? "var(--green)" : "var(--gray-400)", marginTop: "2px", opacity: 0.8 }}>{description}</p>
+        <div style={{ fontSize: "13px", fontWeight: 500, color: checked ? "#1F3D2B" : "#1C1C1C" }}>{label}</div>
+        <div style={{ fontSize: "11px", color: "#6B6B6B", marginTop: "2px" }}>{desc}</div>
       </div>
-      <div style={{ width: "36px", height: "20px", borderRadius: "10px", background: checked ? "var(--green)" : "var(--gray-200)", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
-        <div style={{ position: "absolute", top: "3px", left: checked ? "19px" : "3px", width: "14px", height: "14px", borderRadius: "50%", background: "white", transition: "left 0.2s" }} />
+      {/* Toggle switch */}
+      <div style={{ width: "34px", height: "20px", borderRadius: "10px", background: checked ? "#1F3D2B" : "#C8D8CE", position: "relative", flexShrink: 0, transition: "background .2s" }}>
+        <div style={{ position: "absolute", top: "3px", left: checked ? "17px" : "3px", width: "14px", height: "14px", borderRadius: "50%", background: "#fff", transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }} />
       </div>
     </div>
   );
 }
 
-function AppTag({ name, onRemove }: { name: string; onRemove: () => void }) {
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "3px 8px 3px 10px", background: "var(--green-subtle)", color: "var(--green)", fontSize: "11px", borderRadius: "99px", border: "1px solid var(--green)" }}>
-      {name}
-      <button type="button" onClick={onRemove} style={{ background: "none", border: "none", color: "var(--green)", cursor: "pointer", fontSize: "12px", lineHeight: 1, padding: 0, opacity: 0.7 }}>×</button>
-    </span>
-  );
-}
+// ── Styles ────────────────────────────────────────────────────────────────────
 
-const dragRegion: React.CSSProperties = { position: "absolute", top: 0, left: 0, right: 0, height: "28px", zIndex: 10 };
-const mainStyle: React.CSSProperties = { flex: 1, padding: "52px 56px 40px", display: "flex", flexDirection: "column", overflowY: "auto" };
-const eyebrow: React.CSSProperties = { fontSize: "10px", letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--gray-400)", marginBottom: "6px" };
-const headline: React.CSSProperties = { fontFamily: "var(--serif)", fontSize: "32px", color: "var(--gray-800)", fontWeight: 400, lineHeight: 1.1, marginBottom: "8px" };
-const subtext: React.CSSProperties = { fontSize: "12px", color: "var(--gray-400)", lineHeight: "1.7", marginBottom: "28px" };
-const divider: React.CSSProperties = { height: "1px", background: "var(--gray-200)", marginBottom: "32px" };
-const fieldGroup: React.CSSProperties = { display: "flex", flexDirection: "column", gap: "10px" };
-const fieldLabel: React.CSSProperties = { fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase", color: "var(--gray-400)" };
-const presetBtn: React.CSSProperties = { padding: "9px 18px", border: "1px solid", borderRadius: "var(--radius-sm)", fontFamily: "var(--mono)", fontSize: "12px", cursor: "pointer" };
-const textareaStyle: React.CSSProperties = { padding: "12px 14px", border: "1px solid var(--gray-200)", borderRadius: "var(--radius-sm)", fontFamily: "var(--mono)", fontSize: "12px", color: "var(--gray-800)", background: "var(--white)", outline: "none", resize: "none", width: "100%", lineHeight: "1.6", transition: "border-color 0.15s" };
-const urlInputStyle: React.CSSProperties = { flex: 1, padding: "8px 12px", border: "1px solid var(--gray-200)", borderRadius: "var(--radius-sm)", fontFamily: "var(--mono)", fontSize: "12px", color: "var(--gray-800)", background: "var(--white)", outline: "none", transition: "border-color 0.15s" };
-const addBtn: React.CSSProperties = { padding: "8px 14px", border: "1px solid var(--gray-200)", borderRadius: "var(--radius-sm)", fontFamily: "var(--mono)", fontSize: "16px", color: "var(--gray-600)", background: "transparent", cursor: "pointer" };
-const smallBtn: React.CSSProperties = { padding: "6px 12px", border: "1px solid var(--gray-200)", borderRadius: "var(--radius-sm)", fontFamily: "var(--mono)", fontSize: "10px", letterSpacing: "0.08em", color: "var(--gray-600)", background: "transparent", cursor: "pointer" };
-const modalOverlay: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.08)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, backdropFilter: "blur(2px)" };
-const modalPanel: React.CSSProperties = { background: "var(--white)", borderRadius: "var(--radius-md)", padding: "24px", width: "420px", maxWidth: "90vw", boxShadow: "0 8px 48px rgba(0,0,0,0.12)", border: "1px solid var(--gray-200)" };
-const hintError: React.CSSProperties = { fontSize: "11px", color: "var(--red-muted)", marginTop: "2px" };
-const blockedHint: React.CSSProperties = { fontSize: "11px", color: "var(--gray-400)", marginTop: "8px", lineHeight: "1.5" };
+const mainS: React.CSSProperties = {
+  flex: 1, padding: "40px 44px 32px", overflowY: "auto", display: "flex", flexDirection: "column",
+};
+
+const S: Record<string, React.CSSProperties> = {
+  eyebrow: { fontSize: "10px", fontWeight: 600, letterSpacing: ".12em", textTransform: "uppercase", color: "#6B8F7A", marginBottom: "6px" },
+  headline: { fontSize: "28px", fontWeight: 700, letterSpacing: "-.5px", color: "#1C1C1C", lineHeight: 1.1 },
+  label: { fontSize: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "#6B6B6B", marginBottom: "8px" },
+  preset: { padding: "7px 14px", borderRadius: "5px", border: "1.5px solid", fontSize: "12px", fontWeight: 500, cursor: "pointer", transition: "all .15s" },
+  input: { padding: "9px 12px", border: "1.5px solid #C8D8CE", borderRadius: "5px", fontSize: "13px", color: "#1C1C1C", background: "#fff", outline: "none", width: "100%" },
+  textarea: { padding: "10px 12px", border: "1.5px solid #C8D8CE", borderRadius: "5px", fontSize: "13px", color: "#1C1C1C", background: "#fff", outline: "none", width: "100%", resize: "vertical" as const, lineHeight: 1.65, fontFamily: "Inter, sans-serif" },
+  hint: { fontSize: "11px", color: "#C44536", marginTop: "5px" },
+  btnPrimary: { padding: "11px 22px", border: "none", borderRadius: "5px", fontSize: "12px", fontWeight: 600, letterSpacing: ".07em", textTransform: "uppercase" as const, color: "#fff", background: "#1F3D2B", transition: "background .15s" },
+  btnSecondary: { padding: "8px 14px", border: "1.5px solid #C8D8CE", borderRadius: "5px", fontSize: "12px", fontWeight: 500, color: "#1C1C1C", background: "transparent", cursor: "pointer", transition: "all .15s" },
+  urlTag: { display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: "99px", border: "1px solid #C8D8CE", fontSize: "11px", color: "#1C1C1C", background: "#EBF2EE" },
+  appPickerWrap: { marginTop: "10px", maxHeight: "200px", overflowY: "auto" as const, border: "1px solid #E4EBE7", borderRadius: "5px", padding: "8px" },
+  summary: { padding: "12px 16px", background: "#EBF2EE", borderLeft: "2px solid #1F3D2B", borderRadius: "0 5px 5px 0" },
+};

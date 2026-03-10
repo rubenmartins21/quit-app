@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Rounded square background -->
+  <rect width="512" height="512" rx="112" ry="112" fill="#1F3D2B"/>
+  <!-- "Q" letter — Inter Bold style, white, centered -->
+  <text
+    x="256"
+    y="352"
+    font-family="Inter, 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif"
+    font-size="300"
+    font-weight="700"
+    letter-spacing="-8"
+    text-anchor="middle"
+    fill="white"
+    opacity="0.92"
+  >Q</text>
+</svg>
