@@ -140,23 +140,24 @@ function LogoutButton({ label, onLogout }: { label: string; onLogout: () => Prom
     try { await onLogout(); } finally { setLoading(false); }
   }
   return (
-    <button onClick={handle} disabled={loading} style={{
-      width: "100%", display: "flex", alignItems: "center", gap: "8px",
+    <div onClick={handle} style={{
+      display: "flex", alignItems: "center", gap: "8px",
       padding: "7px 11px", borderRadius: "5px",
-      border: "1px solid rgba(255,255,255,.1)", background: "transparent",
-      cursor: loading ? "default" : "pointer", opacity: loading ? .6 : 1, transition: "background .15s",
+      cursor: loading ? "default" : "pointer",
+      opacity: loading ? .5 : 1,
+      transition: "background .15s",
     }}
       onMouseEnter={e => { if (!loading) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,.07)"; }}
       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
     >
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="rgba(255,255,255,.4)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-        <polyline points="16 17 21 12 16 7" stroke="rgba(255,255,255,.4)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-        <line x1="21" y1="12" x2="9" y2="12" stroke="rgba(255,255,255,.4)" strokeWidth="2" strokeLinecap="round"/>
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="rgba(255,255,255,.65)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        <polyline points="16 17 21 12 16 7" stroke="rgba(255,255,255,.65)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        <line x1="21" y1="12" x2="9" y2="12" stroke="rgba(255,255,255,.65)" strokeWidth="2" strokeLinecap="round"/>
       </svg>
-      <span style={{ fontSize: "11px", fontWeight: 500, color: "rgba(255,255,255,.4)", letterSpacing: ".04em" }}>
+      <span style={{ fontSize: "11px", fontWeight: 500, color: "rgba(255,255,255,.65)", letterSpacing: ".04em" }}>
         {loading ? "…" : label}
       </span>
-    </button>
+    </div>
   );
 }

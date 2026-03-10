@@ -88,26 +88,16 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
     if (res.ok && res.challenge) onCreated(res.challenge);
   }
 
-  function Shell({ children }: { children: React.ReactNode }) {
-    return (
-      <div style={{ height: "100vh", display: "flex", background: "#F7F9F8", overflow: "hidden", position: "relative" }}>
-        <div className="drag-region" style={{ position: "absolute", top: 0, left: 0, right: 0, height: "28px", zIndex: 10 }} />
-        <Sidebar active="challenge" onNavigate={onNavigate} />
-        {children}
-      </div>
-    );
-  }
-
   if (hasActive === null) return (
-    <Shell>
+    <ChallengeShell onNavigate={onNavigate}>
       <main style={mainS}>
         <p style={{ fontSize: "13px", color: "#6B6B6B" }}>{t.common.loading}</p>
       </main>
-    </Shell>
+    </ChallengeShell>
   );
 
   if (hasActive) return (
-    <Shell>
+    <ChallengeShell onNavigate={onNavigate}>
       <main style={mainS}>
         <div style={S.eyebrow}>{t.nav.challenge}</div>
         <div style={S.headline}>{t.create.alreadyActive}</div>
@@ -121,7 +111,7 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
           {t.create.viewStatus}
         </button>
       </main>
-    </Shell>
+    </ChallengeShell>
   );
 
   // ── End date preview
@@ -130,7 +120,7 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
     : null;
 
   return (
-    <Shell>
+    <ChallengeShell onNavigate={onNavigate}>
       <main style={{ ...mainS, overflowY: "auto" }}>
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "540px" }}>
 
@@ -295,7 +285,19 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
           </button>
         </form>
       </main>
-    </Shell>
+    </ChallengeShell>
+  );
+}
+
+// ── ChallengeShell — defined OUTSIDE the main component to prevent remounts ───
+
+function ChallengeShell({ children, onNavigate }: { children: React.ReactNode; onNavigate: (s: AppScreen) => void }) {
+  return (
+    <div style={{ height: "100vh", display: "flex", background: "#F7F9F8", overflow: "hidden", position: "relative" }}>
+      <div className="drag-region" style={{ position: "absolute", top: 0, left: 0, right: 0, height: "28px", zIndex: 10 }} />
+      <Sidebar active="challenge" onNavigate={onNavigate} />
+      {children}
+    </div>
   );
 }
 
