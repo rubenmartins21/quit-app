@@ -21,6 +21,7 @@ electron.contextBridge.exposeInMainWorld("quit", {
     status: () => electron.ipcRenderer.invoke("blocker:status"),
     deactivate: () => electron.ipcRenderer.invoke("blocker:deactivate"),
     installedApps: () => electron.ipcRenderer.invoke("blocker:installed-apps"),
+    refresh: () => electron.ipcRenderer.invoke("blocker:refresh"),
     add: (payload) => electron.ipcRenderer.invoke("blocker:add", payload)
   },
   // Eventos push do main → renderer

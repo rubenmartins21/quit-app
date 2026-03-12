@@ -69,20 +69,12 @@ export const HOSTS_MARKER_END   = "# QUIT-BLOCKER-END";
 /**
  * SafeSearch enforcement via hosts file redirect.
  *
- * Em vez de bloquear (0.0.0.0), redirecionamos para endpoints especiais
- * que forçam o modo seguro nos motores de pesquisa:
- *
- *   Google  → forcesafesearch.google.com (216.239.38.120)
- *   Bing    → strict.bing.com            (204.79.197.220)
- *   YouTube → restrictmoderate.youtube.com (216.239.38.120)
- *
- * Estas entradas são adicionadas ao bloco QUIT-BLOCKER no hosts file
- * SEPARADAS das entradas de bloqueio (0.0.0.0) para não conflituar.
+ * Google e Bing são redirecionados para endpoints de SafeSearch.
+ * YouTube foi removido intencionalmente — não é bloqueado nem redireccionado.
  *
  * Referências:
  *   https://developers.google.com/search/docs/essentials/safesearch
  *   https://help.bing.microsoft.com/#apex/bing/en-US/10002/-1
- *   https://support.google.com/youtube/answer/174084
  */
 export const SAFESEARCH_HOSTS_ENTRIES = [
   // Google — força SafeSearch em todos os domínios regionais
@@ -99,13 +91,6 @@ export const SAFESEARCH_HOSTS_ENTRIES = [
   // Bing — força modo estrito
   "204.79.197.220 www.bing.com",
   "204.79.197.220 bing.com",
-  // YouTube — força modo restrito
-  "216.239.38.120 www.youtube.com",
-  "216.239.38.120 youtube.com",
-  "216.239.38.120 m.youtube.com",
-  "216.239.38.120 youtubei.googleapis.com",
-  "216.239.38.120 youtube.googleapis.com",
-  "216.239.38.120 www.youtube-nocookie.com",
 ].join("\n");
 
 // Padrões para Electron webRequest interceptor (apenas dentro do Electron)

@@ -6,6 +6,7 @@ import {
   getBlockerStatus,
   loadBlockerState,
   addToActiveBlocker,
+  refreshBlocker,
 } from "../blocker/blockerService.js";
 import { getInstalledApps, loadCustomBlocklist } from "../blocker/customBlocklist.js";
 
@@ -56,4 +57,11 @@ ipcMain.handle("blocker:add", async (_e, payload: unknown) => {
   if (!parsed.success) return { error: "Payload inválido" };
   const result = await addToActiveBlocker(parsed.data);
   return result.ok ? { ok: true } : { error: result.error };
+});
+
+// Reaplica o hosts file com a blocklist actual (sem alterar estado)
+// Usado para aplicar mudanças à blocklist a meio de um desafio activo
+ipcMain.handle("blocker:refresh", async () => {
+  const result = await refreshBlocker();
+  return result.ok ? { ok: true } : { error: result.error ?? "Falha ao actualizar bloqueio" };
 });

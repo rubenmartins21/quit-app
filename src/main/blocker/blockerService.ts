@@ -12,6 +12,7 @@ import { runElevated } from "./elevatedHelper.js";
 import { activateRequestInterceptor, deactivateRequestInterceptor } from "./requestInterceptor.js";
 import { startPacServer, stopPacServer } from "./pacServer.js";
 import { startWatchdog, stopWatchdog, checkNow } from "./blockerWatchdog.js";
+import { loadCustomBlocklist, getCustomDomains } from "./customBlocklist.js";
 
 interface BlockerState {
   active: boolean;
@@ -104,6 +105,32 @@ export async function loadAndRestoreInterceptor(): Promise<void> {
   // Inicia watchdog e verifica imediatamente se algo foi removido
   startWatchdog();
   await checkNow();
+}
+
+/**
+ * Reaplica o hosts file + DNS com a blocklist actual (sem tocar no estado).
+ * Usado quando a blocklist muda a meio de um desafio activo (ex: remoção do YouTube).
+ * Requer UAC/osascript/pkexec — o utilizador vai ver uma janela de permissão.
+ */
+export async function refreshBlocker(): Promise<{ ok: boolean; error?: string }> {
+  const state = loadBlockerState();
+  if (!state.active) return { ok: false, error: "Nenhum bloqueio activo." };
+
+  console.log("🔄 Refreshing blocker (reapplying hosts + DNS with current blocklist)...");
+
+  const custom = loadCustomBlocklist();
+  const extraDomains = custom ? getCustomDomains(custom) : [];
+  const blockedApps  = custom?.blockedApps?.map(a => a.exePath) ?? [];
+
+  const result = await runElevated("activate", { extraDomains, blockedApps });
+
+  if (result.ok) {
+    console.log("✅ Blocker refreshed successfully");
+  } else {
+    console.warn("⚠️  Blocker refresh failed:", result.error);
+  }
+
+  return result;
 }
 
 export async function getBlockerStatus(): Promise<{
