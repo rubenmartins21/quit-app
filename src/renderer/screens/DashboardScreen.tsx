@@ -240,7 +240,11 @@ export function DashboardScreen({ user, onNavigate }: Props) {
               <div>
                 <div style={{ fontSize: "12px", fontWeight: 600, color: "#1C1C1C" }}>{t.dash.blockerName}</div>
                 <div style={{ fontSize: "11px", color: "#6B6B6B", marginTop: "1px" }}>
-                  {t.dash.blockerSub(blockerStatus?.blockedDomains?.length ?? 47)}
+                  {t.dash.blockerSub(
+                    (blockerStatus?.blockedUrls?.length ?? 0) +
+                    (blockerStatus?.blockReddit  ? 1 : 0) +
+                    (blockerStatus?.blockTwitter ? 1 : 0)
+                  )}
                 </div>
               </div>
             </div>
