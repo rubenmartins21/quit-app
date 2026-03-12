@@ -127,7 +127,7 @@ export function DashboardScreen({ user, onNavigate }: Props) {
 
         {/* Header */}
         <div>
-          <div style={S.eyebrow}>{t.dash.eyebrow}</div>
+          <div style={S.eyebrow}>{user.email}</div>
           {renderStreak()}
         </div>
 

@@ -23,23 +23,49 @@ interface DayInfo { state: DayState; challengeId?: string; tooltip?: string; }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function toDateKey(d: Date): string { return d.toISOString().slice(0, 10); }
+function toDateKey(d: Date): string {
+  // Usa hora local para evitar desfasamento de timezone em fusos positivos
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 function addDays(d: Date, n: number): Date { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 function startOfDay(iso: string): Date { const d = new Date(iso); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+// Para comparar com "hoje" sem desfasamento de timezone
+function startOfDayLocal(d: Date): Date { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
 
 function buildDayMap(challenges: ChallengeData[]): Map<string, DayInfo> {
-  const map = new Map<string, DayInfo>();
+  const map   = new Map<string, DayInfo>();
+  const today = startOfDayLocal(new Date());
+
   for (const c of challenges) {
     const start = startOfDay(c.startedAt);
-    const endB  = c.cancelledAt ? startOfDay(c.cancelledAt) : c.completedAt ? startOfDay(c.completedAt) : startOfDay(c.endsAt);
-    let cursor  = new Date(start);
+
+    let endB: Date;
+    if (c.cancelledAt) {
+      // Desafio cancelado: streak vai até ao dia anterior ao cancelamento
+      endB = startOfDay(c.cancelledAt);
+    } else if (c.completedAt) {
+      // Desafio concluído: streak inclui todos os dias até ao fim
+      endB = startOfDay(c.completedAt);
+    } else {
+      // Desafio activo: streak só vai até hoje (não pinta dias futuros)
+      endB = addDays(today, 1);
+    }
+
+    let cursor = new Date(start);
     while (cursor < endB) {
       const key = toDateKey(cursor);
       if (!map.has(key) || map.get(key)!.state !== "relapse")
         map.set(key, { state: "streak", challengeId: c.id });
       cursor = addDays(cursor, 1);
     }
-    if (c.cancelledAt) map.set(toDateKey(startOfDay(c.cancelledAt)), { state: "relapse", challengeId: c.id });
+
+    // Dia do cancelamento = recaída
+    if (c.cancelledAt) {
+      map.set(toDateKey(startOfDay(c.cancelledAt)), { state: "relapse", challengeId: c.id });
+    }
   }
   return map;
 }
@@ -125,22 +151,31 @@ function DayCell({ date, dayInfo, onHover, onLeave }: {
   if (!date) return <div style={{ width: CELL, height: CELL, flexShrink: 0 }} />;
 
   const state   = dayInfo?.state ?? "empty";
-  const isToday = toDateKey(date) === toDateKey(new Date());
+  // toDateKey usa hora local → comparação correcta em qualquer fuso
+  const todayKey = toDateKey(new Date());
+  const isToday  = toDateKey(date) === todayKey;
 
   const bg =
     state === "streak"  ? "#1F3D2B" :
     state === "relapse" ? "#FDECEA" :
-    "#EEF2EF";
+    "#DDE8E2";
 
   const border =
-    state === "relapse" ? "1px solid #f5c5c0" :
-    state === "empty"   ? "1px solid #E4EBE7" :
+    isToday              ? "2.5px solid #1F3D2B" :
+    state === "relapse"  ? "1px solid #f5c5c0" :
+    state === "empty"    ? "1px solid #C8D8CE" :
     "none";
 
+  // Hoje com streak: anel branco por fora do fundo verde para ser visível
+  const outline = isToday && state === "streak"
+    ? "2px solid rgba(255,255,255,0.7)"
+    : "none";
+  const outlineOffset = "2px";
+
   const textColor =
-    state === "streak"  ? "rgba(255,255,255,.85)" :
+    state === "streak"  ? "#ffffff" :
     state === "relapse" ? "#C44536" :
-    "#B0BCB5";
+    "#7A9E8C";  /* texto verde-cinza mais legível */
 
   return (
     <div
@@ -150,12 +185,11 @@ function DayCell({ date, dayInfo, onHover, onLeave }: {
         width: CELL, height: CELL, flexShrink: 0,
         display: "flex", alignItems: "center", justifyContent: "center",
         background: bg,
-        border: isToday ? "2px solid #1F3D2B" : border,
+        border,
         borderRadius: "4px",
-        outline: isToday && state !== "streak" ? "2px solid #1F3D2B" : "none",
-        outlineOffset: "1px",
+        outline,
+        outlineOffset,
         transition: "opacity .12s",
-        cursor: dayInfo ? "default" : "default",
       }}
     >
       <span style={{
@@ -617,7 +651,7 @@ export function CalendarView({ challenges, bestStreak = 0 }: Props) {
       <div style={{ display: "flex", gap: 14, marginBottom: 20, alignItems: "center", flexWrap: "wrap" }}>
         <LegendItem bg="#1F3D2B" label={tc.streakDay} />
         <LegendItem bg="#FDECEA" border="1px solid #f5c5c0" label={tc.relapse} />
-        <LegendItem bg="#EEF2EF" border="1px solid #E4EBE7" label={tc.noRecord} />
+        <LegendItem bg="#DDE8E2" border="1px solid #C8D8CE" label={tc.noRecord} />
         <span style={{
           fontSize: "10px",
           color: "#B0BCB5",

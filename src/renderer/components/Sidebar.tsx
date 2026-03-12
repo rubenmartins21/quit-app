@@ -1,9 +1,6 @@
 /**
  * Sidebar.tsx — Quit design system
  * Localização: src/renderer/components/Sidebar.tsx
- *
- * onLogout vem do LogoutContext (App.tsx) — não precisa de prop.
- * Nomes de línguas traduzidos via LANG_OPTIONS_TRANSLATED(lang).
  */
 
 import React, { useState, useRef, useEffect } from "react";
@@ -42,7 +39,7 @@ export function Sidebar({ active, onNavigate }: Props) {
       <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px" }}>
         <LangPicker lang={lang} setLang={setLang} />
         <LogoutButton label={t.common.logout} onLogout={onLogout} />
-        <div style={{ fontSize: "10px", color: "rgba(255,255,255,.18)", letterSpacing: ".04em", padding: "2px 4px 0" }}>v1.0.0</div>
+        <div style={{ fontSize: "10px", color: "rgba(255,255,255,.45)", letterSpacing: ".04em", padding: "2px 4px 0" }}>v1.0.0</div>
       </div>
     </aside>
   );
@@ -74,7 +71,7 @@ function NavItem({ label, isActive, onClick }: { label: string; isActive: boolea
 function LangPicker({ lang, setLang }: { lang: Lang; setLang: (l: Lang) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const options = LANG_OPTIONS_TRANSLATED(lang);   // traduzidos para a língua activa
+  const options = LANG_OPTIONS_TRANSLATED(lang);
   const current = options.find(o => o.value === lang)!;
 
   useEffect(() => {
@@ -86,6 +83,7 @@ function LangPicker({ lang, setLang }: { lang: Lang; setLang: (l: Lang) => void 
 
   return (
     <div ref={ref} style={{ position: "relative" }} className="no-drag">
+      {/* Trigger */}
       <button onClick={() => setOpen(o => !o)} style={{
         width: "100%", display: "flex", alignItems: "center", gap: "7px",
         padding: "7px 11px", borderRadius: "5px",
@@ -100,12 +98,13 @@ function LangPicker({ lang, setLang }: { lang: Lang; setLang: (l: Lang) => void 
         <span style={{ fontSize: "7px", color: "rgba(255,255,255,.3)", lineHeight: 1 }}>{open ? "▲" : "▼"}</span>
       </button>
 
+      {/* Dropdown — sem fundo verde na opção seleccionada */}
       {open && (
         <div style={{
           position: "absolute", bottom: "calc(100% + 4px)", left: 0, right: 0,
-          background: "rgba(20,50,34,.96)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
-          border: "1px solid rgba(255,255,255,.12)", borderRadius: "5px",
-          overflow: "hidden", zIndex: 200, boxShadow: "0 -4px 24px rgba(0,0,0,.3)",
+          background: "#ffffff",
+          border: "1px solid #E4EBE7", borderRadius: "5px",
+          overflow: "hidden", zIndex: 200, boxShadow: "0 -4px 16px rgba(0,0,0,.12)",
         }}>
           {options.map(o => {
             const sel = o.value === lang;
@@ -113,14 +112,23 @@ function LangPicker({ lang, setLang }: { lang: Lang; setLang: (l: Lang) => void 
               <div key={o.value} onClick={() => { setLang(o.value); setOpen(false); }} style={{
                 display: "flex", alignItems: "center", gap: "8px",
                 padding: "9px 11px", cursor: "pointer",
-                background: sel ? "rgba(255,255,255,.1)" : "transparent", transition: "background .12s",
+                background: "transparent",
+                transition: "background .12s",
               }}
-                onMouseEnter={e => { if (!sel) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,.07)"; }}
-                onMouseLeave={e => { if (!sel) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#EBF2EE"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
               >
                 <span style={{ fontSize: "13px", lineHeight: 1 }}>{o.flag}</span>
-                <span style={{ flex: 1, fontSize: "11px", fontWeight: 500, letterSpacing: ".04em", color: sel ? "#fff" : "rgba(255,255,255,.55)" }}>{o.label}</span>
-                {sel && <span style={{ fontSize: "9px", color: "rgba(255,255,255,.45)" }}>✓</span>}
+                <span style={{
+                  flex: 1,
+                  fontSize: "11px",
+                  fontWeight: sel ? 600 : 500,
+                  letterSpacing: ".04em",
+                  color: sel ? "#1F3D2B" : "#6B6B6B",
+                }}>
+                  {o.label}
+                </span>
+                {sel && <span style={{ fontSize: "9px", color: "#1F3D2B" }}>✓</span>}
               </div>
             );
           })}
