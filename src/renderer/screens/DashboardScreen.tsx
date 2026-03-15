@@ -106,12 +106,8 @@ export function DashboardScreen({ user, onNavigate }: Props) {
             <div style={S.bigSub}>{t.common.loading}</div>
           </>
         );
-      return (
-        <>
-          <div style={{ ...S.bigNum, fontSize: "36px" }}>—</div>
-          <div style={S.bigSub}>{user.email}</div>
-        </>
-      );
+      // Sem desafio activo — só o traço, email já está no eyebrow
+      return <div style={{ ...S.bigNum, fontSize: "36px" }}>—</div>;
     }
     if (elapsed.lessThanOneDay) {
       const ts =
@@ -183,7 +179,7 @@ export function DashboardScreen({ user, onNavigate }: Props) {
       >
         {/* Header */}
         <div>
-          <div style={S.eyebrow}>{t.dash.eyebrow}</div>
+          <div style={S.eyebrow}>{user.email}</div>
           {renderStreak()}
         </div>
 

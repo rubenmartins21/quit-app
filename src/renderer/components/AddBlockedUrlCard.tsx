@@ -257,9 +257,23 @@ function PlatformRow({ label, description, enabled, loading, onEnable }: {
   label: string; description: string; enabled: boolean; loading: boolean; onEnable: () => void;
 }) {
   return (
-    <div onClick={() => !enabled && !loading && onEnable()} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", border: `1px solid ${enabled ? "var(--green)" : "var(--gray-200)"}`, borderRadius: "var(--radius-sm)", cursor: enabled ? "default" : loading ? "wait" : "pointer", background: enabled ? "var(--green-subtle)" : "transparent", transition: "all 0.15s", opacity: loading ? 0.6 : 1 }}>
+    <div
+      onClick={() => !enabled && !loading && onEnable()}
+      style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        padding: "10px 12px",
+        border: `1px solid ${enabled ? "var(--green)" : "var(--border-2)"}`,
+        borderRadius: "var(--radius-sm)",
+        cursor: enabled ? "default" : loading ? "wait" : "pointer",
+        background: enabled ? "var(--green-subtle)" : "var(--white)",
+        transition: "all 0.15s",
+        opacity: loading ? 0.6 : 1,
+      }}
+      onMouseEnter={e => { if (!enabled && !loading) (e.currentTarget as HTMLElement).style.borderColor = "var(--green)"; }}
+      onMouseLeave={e => { if (!enabled && !loading) (e.currentTarget as HTMLElement).style.borderColor = "var(--border-2)"; }}
+    >
       <div>
-        <p style={{ fontSize: "12px", color: enabled ? "var(--green)" : "var(--gray-800)" }}>{label}</p>
+        <p style={{ fontSize: "12px", fontWeight: 500, color: enabled ? "var(--green)" : "var(--gray-800)" }}>{label}</p>
         <p style={{ fontSize: "10px", color: enabled ? "var(--green)" : "var(--gray-400)", opacity: 0.8, marginTop: "1px" }}>{description}</p>
       </div>
       {loading ? (
@@ -269,9 +283,15 @@ function PlatformRow({ label, description, enabled, loading, onEnable }: {
           Bloqueado ✓
         </span>
       ) : (
-        <div style={{ width: "34px", height: "18px", borderRadius: "9px", background: "var(--gray-200)", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
-          <div style={{ position: "absolute", top: "3px", left: "3px", width: "12px", height: "12px", borderRadius: "50%", background: "white", transition: "left 0.2s" }} />
-        </div>
+        <span style={{
+          fontSize: "10px", fontWeight: 600, letterSpacing: "0.05em",
+          color: "var(--gray-600)", background: "var(--gray-50)",
+          padding: "4px 12px", borderRadius: "99px",
+          border: "1px solid var(--border-2)",
+          pointerEvents: "none",
+        }}>
+          + Bloquear
+        </span>
       )}
     </div>
   );
