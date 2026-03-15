@@ -66,10 +66,15 @@ export function QuitFlowScreen({ challenge, onDone, onBack }: Props) {
 
   async function handleConfirm() {
     setSubmitting(true); setError("");
-    const res = await ipc.challenge.quit(challenge.id, feeling.trim() || undefined);
+    // quitRequest.create requer feeling com mín. 5 chars
+    const feelingText = feeling.trim() || "Não especificado.";
+    const res = await ipc.challenge.quitRequest.create(challenge.id, feelingText);
     setSubmitting(false);
     if (res.error) { setError(res.error); return; }
-    if (res.ok && res.challenge) { setStep(4); }
+    if (res.ok && res.challenge) {
+      setStep(4);
+      onDone(res.challenge);
+    }
   }
 
   const overlay: React.CSSProperties = {
@@ -131,20 +136,21 @@ export function QuitFlowScreen({ challenge, onDone, onBack }: Props) {
             <textarea
               rows={4}
               value={feeling}
-              onChange={e => setFeeling(e.target.value)}
+              onChange={e => { setFeeling(e.target.value); if (error) setError(""); }}
               placeholder="Escreve aqui…"
               style={{
                 width: "100%", padding: "10px 12px",
                 border: "1.5px solid #C8D8CE", borderRadius: "5px",
                 fontSize: "13px", lineHeight: 1.65, fontFamily: "Inter, sans-serif",
                 color: "#1C1C1C", background: "#F7F9F8",
-                outline: "none", resize: "vertical" as const, marginBottom: "20px",
+                outline: "none", resize: "vertical" as const, marginBottom: "8px",
               }}
               autoFocus
             />
+            {error && <p style={{ fontSize: "12px", color: "#C44536", marginBottom: "12px" }}>{error}</p>}
             <div style={{ display: "flex", gap: "10px" }}>
               <button onClick={() => setStep(1)} style={btnGhost}>← Voltar</button>
-              <button onClick={() => setStep(3)} style={btnDanger}>{t.quit.confirm} →</button>
+              <button onClick={() => { if (feeling.trim().length < 5) { setError("Escreve pelo menos 5 caracteres."); return; } setError(""); setStep(3); }} style={btnDanger}>{t.quit.confirm} →</button>
             </div>
           </>
         )}
