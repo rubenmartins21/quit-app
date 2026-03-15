@@ -1,6 +1,12 @@
 /**
  * CreateChallengeScreen.tsx — Quit design system
  * Localização: src/renderer/screens/CreateChallengeScreen.tsx
+ *
+ * Novidades:
+ * - Badges removíveis para apps seleccionadas
+ * - Botão "Ver estado" mais pequeno (secondary, inline)
+ * - Reddit/Twitter auto-seleccionados quando há desafio activo
+ * - Texto "Vitória" substituído por "Completo"
  */
 
 import React, { useEffect, useState } from "react";
@@ -21,6 +27,7 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
   const { t } = useI18n();
 
   const [hasActive,     setHasActive]     = useState<boolean | null>(null);
+  const [activeChallenge, setActiveChallenge] = useState<ChallengeData | null>(null);
   const [selectedDays,  setSelectedDays]  = useState<number | null>(30);
   const [customDays,    setCustomDays]    = useState("");
   const [useCustom,     setUseCustom]     = useState(false);
@@ -40,11 +47,25 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
   const [loadingApps,   setLoadingApps]   = useState(false);
 
   useEffect(() => {
-    ipc.challenge.active().then(r => setHasActive(!!r.challenge));
+    ipc.challenge.active().then(r => {
+      const c = r.challenge ?? null;
+      setHasActive(!!c);
+      setActiveChallenge(c);
+      // Auto-select Reddit/Twitter se estão activos no desafio actual
+      if (c) {
+        if (c.blockReddit)  setBlockReddit(true);
+        if (c.blockTwitter) setBlockTwitter(true);
+      }
+    });
   }, []);
 
   async function handleLoadApps() {
-    if (installedApps !== null) { setShowAppPicker(true); return; }
+    if (blockedApps.length > 0 && showAppPicker) {
+      // "Confirmar" — fecha o picker
+      setShowAppPicker(false);
+      return;
+    }
+    if (installedApps !== null) { setShowAppPicker(p => !p); return; }
     setLoadingApps(true);
     const r = await ipc.blocker.installedApps();
     setInstalledApps(r.apps ?? []);
@@ -56,6 +77,10 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
     setBlockedApps(p => p.find(a => a.exePath === app.exePath)
       ? p.filter(a => a.exePath !== app.exePath)
       : [...p, { name: app.name, exePath: app.exePath }]);
+  }
+
+  function removeApp(exePath: string) {
+    setBlockedApps(p => p.filter(a => a.exePath !== exePath));
   }
 
   function addCustomUrl() {
@@ -96,25 +121,38 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
     </ChallengeShell>
   );
 
+  // ── Desafio já activo ─────────────────────────────────────────────────────
   if (hasActive) return (
     <ChallengeShell onNavigate={onNavigate}>
       <main style={mainS}>
         <div style={S.eyebrow}>{t.nav.challenge}</div>
         <div style={S.headline}>{t.create.alreadyActive}</div>
-        <p style={{ fontSize: "13px", color: "#6B6B6B", lineHeight: 1.7, marginBottom: "24px", maxWidth: "400px" }}>
+        <p style={{ fontSize: "13px", color: "#6B6B6B", lineHeight: 1.7, marginBottom: "20px", maxWidth: "400px" }}>
           {t.create.alreadyActiveDesc.split("\n").join(" ")}
         </p>
-        <button style={S.btnPrimary} onClick={() => onNavigate("dashboard")}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#173222"; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#1F3D2B"; }}
+
+        {/* Mostrar Reddit/Twitter activos no desafio corrente */}
+        {activeChallenge && (activeChallenge.blockReddit || activeChallenge.blockTwitter) && (
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "20px" }}>
+            {activeChallenge.blockReddit  && <ActiveBadge label="Reddit" />}
+            {activeChallenge.blockTwitter && <ActiveBadge label="Twitter / X" />}
+          </div>
+        )}
+
+        {/* Botão mais pequeno e discreto */}
+        <button
+          style={S.btnViewStatus}
+          onClick={() => onNavigate("dashboard")}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#EBF2EE"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
         >
-          {t.create.viewStatus}
+          {t.create.viewStatus} →
         </button>
       </main>
     </ChallengeShell>
   );
 
-  // ── End date preview
+  // ── End date preview ──────────────────────────────────────────────────────
   const endDate = effectiveDays && daysValid
     ? new Date(Date.now() + effectiveDays * 86_400_000).toLocaleDateString()
     : null;
@@ -225,15 +263,34 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
             {/* App picker */}
             <div style={{ marginTop: "16px" }}>
               <div style={{ ...S.label, marginBottom: "8px" }}>{t.create.installedApps}</div>
+
+              {/* Badges ACIMA do botão — sempre visíveis */}
+              {blockedApps.length > 0 && (
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" as const, marginBottom: "10px" }}>
+                  {blockedApps.map(app => (
+                    <AppBadge key={app.exePath} name={app.name} onRemove={() => removeApp(app.exePath)} />
+                  ))}
+                </div>
+              )}
+
               <button type="button" onClick={handleLoadApps} style={S.btnSecondary} disabled={loadingApps}>
-                {loadingApps ? t.create.loading : blockedApps.length > 0 ? t.create.confirm(blockedApps.length) : t.create.select}
+                {loadingApps
+                  ? t.create.loading
+                  : showAppPicker && blockedApps.length > 0
+                    ? t.create.confirm(blockedApps.length)
+                    : blockedApps.length > 0
+                      ? `✓ ${blockedApps.length} seleccionada${blockedApps.length > 1 ? "s" : ""}`
+                      : t.create.select
+                }
               </button>
+
               {showAppPicker && installedApps !== null && (
                 <div style={S.appPickerWrap}>
                   <input
                     type="text" value={appSearch} onChange={e => setAppSearch(e.target.value)}
                     placeholder="Pesquisar…"
                     style={{ ...S.input, marginBottom: "8px" }}
+                    autoFocus
                   />
                   {filteredApps.length === 0
                     ? <p style={{ fontSize: "12px", color: "#6B6B6B" }}>{t.create.noAppsFound}</p>
@@ -289,7 +346,7 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
   );
 }
 
-// ── ChallengeShell — defined OUTSIDE the main component to prevent remounts ───
+// ── ChallengeShell ────────────────────────────────────────────────────────────
 
 function ChallengeShell({ children, onNavigate }: { children: React.ReactNode; onNavigate: (s: AppScreen) => void }) {
   return (
@@ -298,6 +355,58 @@ function ChallengeShell({ children, onNavigate }: { children: React.ReactNode; o
       <Sidebar active="challenge" onNavigate={onNavigate} />
       {children}
     </div>
+  );
+}
+
+// ── AppBadge — badge removível para apps seleccionadas ────────────────────────
+
+function AppBadge({ name, onRemove }: { name: string; onRemove: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span
+      style={{
+        display: "inline-flex", alignItems: "center", gap: "5px",
+        padding: "4px 10px 4px 10px", borderRadius: "99px",
+        border: "1.5px solid #1F3D2B",
+        background: hover ? "#d6e8dd" : "#EBF2EE",
+        fontSize: "11px", fontWeight: 500, color: "#1F3D2B",
+        cursor: "default", transition: "background .12s",
+      }}
+    >
+      {name}
+      <span
+        onClick={onRemove}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: "14px", height: "14px", borderRadius: "50%",
+          background: "rgba(31,61,43,.15)", cursor: "pointer",
+          fontSize: "10px", lineHeight: 1, color: "#1F3D2B",
+          transition: "background .12s",
+        }}
+        onMouseEnterCapture={e => { (e.currentTarget as HTMLElement).style.background = "rgba(31,61,43,.3)"; }}
+        onMouseLeaveCapture={e => { (e.currentTarget as HTMLElement).style.background = "rgba(31,61,43,.15)"; }}
+      >
+        ×
+      </span>
+    </span>
+  );
+}
+
+// ── ActiveBadge — mostra items activos no desafio em curso ────────────────────
+
+function ActiveBadge({ label }: { label: string }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: "5px",
+      padding: "4px 10px", borderRadius: "99px",
+      border: "1px solid #C8D8CE", background: "#EBF2EE",
+      fontSize: "11px", color: "#1F3D2B", fontWeight: 500,
+    }}>
+      <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#1F3D2B", flexShrink: 0 }} />
+      {label}
+    </span>
   );
 }
 
@@ -318,7 +427,6 @@ function ToggleRow({ label, desc, checked, onChange }: {
         <div style={{ fontSize: "13px", fontWeight: 500, color: checked ? "#1F3D2B" : "#1C1C1C" }}>{label}</div>
         <div style={{ fontSize: "11px", color: "#6B6B6B", marginTop: "2px" }}>{desc}</div>
       </div>
-      {/* Toggle switch */}
       <div style={{ width: "34px", height: "20px", borderRadius: "10px", background: checked ? "#1F3D2B" : "#C8D8CE", position: "relative", flexShrink: 0, transition: "background .2s" }}>
         <div style={{ position: "absolute", top: "3px", left: checked ? "17px" : "3px", width: "14px", height: "14px", borderRadius: "50%", background: "#fff", transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }} />
       </div>
@@ -333,16 +441,18 @@ const mainS: React.CSSProperties = {
 };
 
 const S: Record<string, React.CSSProperties> = {
-  eyebrow: { fontSize: "10px", fontWeight: 600, letterSpacing: ".12em", textTransform: "uppercase", color: "#6B8F7A", marginBottom: "6px" },
-  headline: { fontSize: "28px", fontWeight: 700, letterSpacing: "-.5px", color: "#1C1C1C", lineHeight: 1.1 },
-  label: { fontSize: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "#6B6B6B", marginBottom: "8px" },
-  preset: { padding: "7px 14px", borderRadius: "5px", border: "1.5px solid", fontSize: "12px", fontWeight: 500, cursor: "pointer", transition: "all .15s" },
-  input: { padding: "9px 12px", border: "1.5px solid #C8D8CE", borderRadius: "5px", fontSize: "13px", color: "#1C1C1C", background: "#fff", outline: "none", width: "100%" },
-  textarea: { padding: "10px 12px", border: "1.5px solid #C8D8CE", borderRadius: "5px", fontSize: "13px", color: "#1C1C1C", background: "#fff", outline: "none", width: "100%", resize: "vertical" as const, lineHeight: 1.65, fontFamily: "Inter, sans-serif" },
-  hint: { fontSize: "11px", color: "#C44536", marginTop: "5px" },
-  btnPrimary: { padding: "11px 22px", border: "none", borderRadius: "5px", fontSize: "12px", fontWeight: 600, letterSpacing: ".07em", textTransform: "uppercase" as const, color: "#fff", background: "#1F3D2B", transition: "background .15s" },
+  eyebrow:     { fontSize: "10px", fontWeight: 600, letterSpacing: ".12em", textTransform: "uppercase", color: "#6B8F7A", marginBottom: "6px" },
+  headline:    { fontSize: "28px", fontWeight: 700, letterSpacing: "-.5px", color: "#1C1C1C", lineHeight: 1.1 },
+  label:       { fontSize: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", color: "#6B6B6B", marginBottom: "8px" },
+  preset:      { padding: "7px 14px", borderRadius: "5px", border: "1.5px solid", fontSize: "12px", fontWeight: 500, cursor: "pointer", transition: "all .15s" },
+  input:       { padding: "9px 12px", border: "1.5px solid #C8D8CE", borderRadius: "5px", fontSize: "13px", color: "#1C1C1C", background: "#fff", outline: "none", width: "100%" },
+  textarea:    { padding: "10px 12px", border: "1.5px solid #C8D8CE", borderRadius: "5px", fontSize: "13px", color: "#1C1C1C", background: "#fff", outline: "none", width: "100%", resize: "vertical" as const, lineHeight: 1.65, fontFamily: "Inter, sans-serif" },
+  hint:        { fontSize: "11px", color: "#C44536", marginTop: "5px" },
+  btnPrimary:  { padding: "11px 22px", border: "none", borderRadius: "5px", fontSize: "12px", fontWeight: 600, letterSpacing: ".07em", textTransform: "uppercase" as const, color: "#fff", background: "#1F3D2B", transition: "background .15s" },
   btnSecondary: { padding: "8px 14px", border: "1.5px solid #C8D8CE", borderRadius: "5px", fontSize: "12px", fontWeight: 500, color: "#1C1C1C", background: "transparent", cursor: "pointer", transition: "all .15s" },
-  urlTag: { display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: "99px", border: "1px solid #C8D8CE", fontSize: "11px", color: "#1C1C1C", background: "#EBF2EE" },
+  // Botão "ver estado" — mais pequeno, discreto, sem uppercase
+  btnViewStatus: { padding: "7px 12px", border: "1px solid #C8D8CE", borderRadius: "5px", fontSize: "11px", fontWeight: 500, color: "#6B6B6B", background: "transparent", cursor: "pointer", transition: "all .15s" },
+  urlTag:      { display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: "99px", border: "1px solid #C8D8CE", fontSize: "11px", color: "#1C1C1C", background: "#EBF2EE" },
   appPickerWrap: { marginTop: "10px", maxHeight: "200px", overflowY: "auto" as const, border: "1px solid #E4EBE7", borderRadius: "5px", padding: "8px" },
-  summary: { padding: "12px 16px", background: "#EBF2EE", borderLeft: "2px solid #1F3D2B", borderRadius: "0 5px 5px 0" },
+  summary:     { padding: "12px 16px", background: "#EBF2EE", borderLeft: "2px solid #1F3D2B", borderRadius: "0 5px 5px 0" },
 };
