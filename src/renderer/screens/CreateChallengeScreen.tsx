@@ -51,11 +51,12 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
       const c = r.challenge ?? null;
       setHasActive(!!c);
       setActiveChallenge(c);
-      // Auto-select Reddit/Twitter se estão activos no desafio actual
-      if (c) {
-        if (c.blockReddit)  setBlockReddit(true);
-        if (c.blockTwitter) setBlockTwitter(true);
-      }
+    });
+    // Lê estado do bloqueio separadamente — blockReddit/blockTwitter estão
+    // no BlockerStatus (custom-blocklist.json), não no ChallengeData
+    ipc.blocker.status().then(bs => {
+      if (bs.blockReddit)  setBlockReddit(true);
+      if (bs.blockTwitter) setBlockTwitter(true);
     });
   }, []);
 
@@ -132,14 +133,6 @@ export function CreateChallengeScreen({ onCreated, onNavigate }: Props) {
         </p>
 
         {/* Mostrar Reddit/Twitter activos no desafio corrente */}
-        {activeChallenge && (activeChallenge.blockReddit || activeChallenge.blockTwitter) && (
-          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "20px" }}>
-            {activeChallenge.blockReddit  && <ActiveBadge label="Reddit" />}
-            {activeChallenge.blockTwitter && <ActiveBadge label="Twitter / X" />}
-          </div>
-        )}
-
-        {/* Botão mais pequeno e discreto */}
         <button
           style={S.btnViewStatus}
           onClick={() => onNavigate("dashboard")}
@@ -381,12 +374,10 @@ function AppBadge({ name, onRemove }: { name: string; onRemove: () => void }) {
         style={{
           display: "inline-flex", alignItems: "center", justifyContent: "center",
           width: "14px", height: "14px", borderRadius: "50%",
-          background: "rgba(31,61,43,.15)", cursor: "pointer",
-          fontSize: "10px", lineHeight: 1, color: "#1F3D2B",
+          background: hover ? "rgba(31,61,43,.3)" : "rgba(31,61,43,.15)",
+          cursor: "pointer", fontSize: "10px", lineHeight: 1, color: "#1F3D2B",
           transition: "background .12s",
         }}
-        onMouseEnterCapture={e => { (e.currentTarget as HTMLElement).style.background = "rgba(31,61,43,.3)"; }}
-        onMouseLeaveCapture={e => { (e.currentTarget as HTMLElement).style.background = "rgba(31,61,43,.15)"; }}
       >
         ×
       </span>
